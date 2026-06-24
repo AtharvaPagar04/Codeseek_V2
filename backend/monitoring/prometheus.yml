@@ -1,0 +1,42 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+rule_files:
+  - "alerts.yml"
+
+scrape_configs:
+  # Codeseek backend — exposes /api/v1/metrics (Prometheus format)
+  - job_name: "codeseek-api"
+    static_configs:
+      - targets: ["codeseek-api:8000"]
+    metrics_path: /api/v1/metrics
+    scrape_interval: 15s
+
+  # Codeseek API health as a probe (up/down)
+  - job_name: "codeseek-health"
+    static_configs:
+      - targets: ["codeseek-api:8000"]
+    metrics_path: /api/v1/health
+    scrape_interval: 30s
+    # Health returns JSON, not Prometheus format — use it via blackbox or custom rule.
+    # Prometheus will mark the target "up" as long as /health returns 200.
+    honor_labels: true
+
+  # Qdrant — native Prometheus endpoint
+  - job_name: "qdrant"
+    static_configs:
+      - targets: ["qdrant:6333"]
+    metrics_path: /metrics
+    scrape_interval: 30s
+
+  # Postgres via postgres_exporter
+  - job_name: "postgres"
+    static_configs:
+      - targets: ["pg_exporter:9187"]
+    scrape_interval: 30s

@@ -1,0 +1,198 @@
+{
+  "name": "trading-bot-retrieval-eval-hard-v1",
+  "repo_root_hint": "/tmp/trading-bot-e2e",
+  "cases": [
+    {
+      "id": "h-001",
+      "query": "Trace account_info() to the final outbound HTTP GET and identify where auth headers and signature are added.",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "account_info"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "authenticated_get"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "signed_params"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "auth_headers"}
+      ]
+    },
+    {
+      "id": "h-002",
+      "query": "Which method computes Binance HMAC SHA256 signature and which method URL-encodes params before signing?",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "sign_query"}
+      ]
+    },
+    {
+      "id": "h-003",
+      "query": "Where is timestamp adjusted/produced before request signing?",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "adjusted_timestamp"}
+      ]
+    },
+    {
+      "id": "h-004",
+      "query": "Find the exact method that gates authenticated requests if credentials are missing.",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "credentials_configured"}
+      ]
+    },
+    {
+      "id": "h-005",
+      "query": "Show where /api/v3/account endpoint is wired and how it delegates.",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "account_info"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "authenticated_get"}
+      ]
+    },
+    {
+      "id": "h-006",
+      "query": "Which test verifies authenticated_get exists and what object is instantiated there?",
+      "expected_sources": [
+        {"relative_path": "backend/tests/test_authenticated_get.py", "symbol_name": "test_authenticated_get_exists"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "BinanceRestClient"}
+      ]
+    },
+    {
+      "id": "h-007",
+      "query": "Locate websocket lifecycle tests for creation and stop behavior.",
+      "expected_sources": [
+        {"relative_path": "backend/tests/test_websocket_recovery_validation.py", "symbol_name": "test_transport_failure_triggers_emergency_stop"}
+      ]
+    },
+    {
+      "id": "h-008",
+      "query": "What class abstracts websocket connectivity and where is it defined?",
+      "expected_sources": [
+        {"relative_path": "backend/src/api/websocket/websocket_manager.py", "symbol_name": "WebSocketManager"}
+      ]
+    },
+    {
+      "id": "h-009",
+      "query": "Find event-bus implementation used for async runtime dispatch.",
+      "expected_sources": [
+        {"relative_path": "backend/src/runtime/async_event_bus.py", "symbol_name": "AsyncEventBus"}
+      ]
+    },
+    {
+      "id": "h-010",
+      "query": "In frontend API service, where is active session fetched and where is session by id fetched?",
+      "expected_sources": [
+        {"relative_path": "frontend/services/api.ts", "symbol_name": "fetchActiveSession"},
+        {"relative_path": "frontend/services/api.ts", "symbol_name": "fetchSessionById"}
+      ]
+    },
+    {
+      "id": "h-011",
+      "query": "Find both frontend analytics fetch functions (overall and session trade analytics).",
+      "expected_sources": [
+        {"relative_path": "frontend/services/api.ts", "symbol_name": "fetchOverallAnalytics"},
+        {"relative_path": "frontend/services/api.ts", "symbol_name": "fetchSessionTradeAnalytics"}
+      ]
+    },
+    {
+      "id": "h-012",
+      "query": "Which method attaches X-MBX-APIKEY and where is that header consumed for GET?",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "auth_headers"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "authenticated_get"}
+      ]
+    },
+    {
+      "id": "h-013",
+      "query": "Where is the plain GET helper in BinanceRestClient and how does it differ from authenticated_get?",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "get"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "authenticated_get"}
+      ]
+    },
+    {
+      "id": "h-014",
+      "query": "Locate tests around listen key and account info method existence.",
+      "expected_sources": [
+        {"relative_path": "backend/tests/test_listen_key_method.py", "symbol_name": "test_listen_key_method_exists"},
+        {"relative_path": "backend/tests/test_account_info_method.py", "symbol_name": "test_account_info_method_exists"}
+      ]
+    },
+    {
+      "id": "h-015",
+      "query": "Which test validates engine dependency on Binance rest client and where is the class under test?",
+      "expected_sources": [
+        {"relative_path": "backend/tests/test_binance_engine_dependencies.py", "symbol_name": "test_binance_engine_has_rest_client"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "BinanceRestClient"}
+      ]
+    },
+    {
+      "id": "h-016",
+      "query": "Where is JWT verification implemented in this repo?",
+      "expected_sources": []
+    },
+    {
+      "id": "h-017",
+      "query": "Where is OAuth refresh token flow implemented?",
+      "expected_sources": []
+    },
+    {
+      "id": "h-018",
+      "query": "Show where BinanceRestClient constructor initializes transport/session details.",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "__init__"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "BinanceRestClient"}
+      ]
+    },
+    {
+      "id": "h-019",
+      "query": "Find where ping endpoint is called in rest client and compare with account info path.",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "ping"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "account_info"}
+      ]
+    },
+    {
+      "id": "h-020",
+      "query": "Locate methods involved in producing signed query params end-to-end.",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "signed_params"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "sign_query"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "adjusted_timestamp"}
+      ]
+    },
+    {
+      "id": "h-021",
+      "query": "Which file and symbol expose AsyncEventBus and what methods does it likely include?",
+      "expected_sources": [
+        {"relative_path": "backend/src/runtime/async_event_bus.py", "symbol_name": "AsyncEventBus"}
+      ]
+    },
+    {
+      "id": "h-022",
+      "query": "Find exact symbol for websocket client class and one test that references its behavior.",
+      "expected_sources": [
+        {"relative_path": "backend/src/market_data/websocket_client.py", "symbol_name": "WebSocketClient"},
+        {"relative_path": "backend/tests/test_websocket_client.py", "symbol_name": ""}
+      ]
+    },
+    {
+      "id": "h-023",
+      "query": "Where is fetchSessionTradeAnalytics defined and what neighboring analytics function exists in same file?",
+      "expected_sources": [
+        {"relative_path": "frontend/services/api.ts", "symbol_name": "fetchSessionTradeAnalytics"},
+        {"relative_path": "frontend/services/api.ts", "symbol_name": "fetchOverallAnalytics"}
+      ]
+    },
+    {
+      "id": "h-024",
+      "query": "Identify the symbol that constructs auth header dict and the key name used.",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "auth_headers"}
+      ]
+    },
+    {
+      "id": "h-025",
+      "query": "Find all primary symbols in binance_rest_client.py related to authenticated request flow.",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "authenticated_get"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "signed_params"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "sign_query"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "auth_headers"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "credentials_configured"}
+      ]
+    }
+  ]
+}

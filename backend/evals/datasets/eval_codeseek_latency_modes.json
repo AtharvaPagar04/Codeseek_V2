@@ -1,0 +1,42 @@
+{
+  "name": "codeseek-latency-modes-v1",
+  "notes": [
+    "This fixture exists to measure dedicated latency buckets: retrieval-only, deterministic, and LLM-backed.",
+    "Run with provider flags for real provider-backed LLM latency, for example: --provider groq --api-key-env GROQ_API_KEY.",
+    "Without provider flags, the LLM case still verifies llm routing but will not measure upstream provider latency."
+  ],
+  "cases": [
+    {
+      "id": "retrieval_only_config_lookup",
+      "latency_profile": "retrieval_only",
+      "query": "Where is RETRIEVAL_ENABLE_LEXICAL configured?",
+      "expected_files": [
+        "retrieval/config.py"
+      ]
+    },
+    {
+      "id": "deterministic_flow_orchestration",
+      "latency_profile": "deterministic",
+      "query": "walk me through backend request orchestration flow",
+      "expected_files": [
+        "retrieval/api_service.py",
+        "retrieval/main.py"
+      ],
+      "expected_response_mode": "flow_summary",
+      "expected_answer_terms": [
+        "retrieval pipeline",
+        "session"
+      ]
+    },
+    {
+      "id": "llm_source_gating_tradeoffs",
+      "latency_profile": "llm",
+      "query": "compare source display filtering and reasoning-source assembly tradeoffs in this backend",
+      "expected_files": [
+        "retrieval/search/source_filter.py",
+        "retrieval/generation/assembler.py"
+      ],
+      "expected_response_mode": "llm"
+    }
+  ]
+}

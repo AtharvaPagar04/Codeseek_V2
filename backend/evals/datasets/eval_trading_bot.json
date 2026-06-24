@@ -1,0 +1,147 @@
+{
+  "name": "trading-bot-retrieval-eval-v1",
+  "repo_root_hint": "/tmp/trading-bot-e2e",
+  "cases": [
+    {
+      "id": "tb-001",
+      "query": "where is authenticated_get implemented",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "authenticated_get"}
+      ]
+    },
+    {
+      "id": "tb-002",
+      "query": "how is binance request signature generated",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "sign_query"}
+      ]
+    },
+    {
+      "id": "tb-003",
+      "query": "where are timestamp and signature injected into params",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "signed_params"}
+      ]
+    },
+    {
+      "id": "tb-004",
+      "query": "which function provides X-MBX-APIKEY header",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "auth_headers"}
+      ]
+    },
+    {
+      "id": "tb-005",
+      "query": "trace account_info call path to http request",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "account_info"},
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "authenticated_get"}
+      ]
+    },
+    {
+      "id": "tb-006",
+      "query": "where are api credentials checked before auth request",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "credentials_configured"}
+      ]
+    },
+    {
+      "id": "tb-007",
+      "query": "which class manages binance websocket connection",
+      "expected_sources": [
+        {"relative_path": "backend/src/market/binance_ws.py", "symbol_name": "BinanceWebsocketClient"}
+      ]
+    },
+    {
+      "id": "tb-008",
+      "query": "where is async event bus implemented",
+      "expected_sources": [
+        {"relative_path": "backend/src/runtime/async_event_bus.py", "symbol_name": "AsyncEventBus"}
+      ]
+    },
+    {
+      "id": "tb-009",
+      "query": "where is get method for binance rest wrapper",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "get"}
+      ]
+    },
+    {
+      "id": "tb-010",
+      "query": "which function tests authenticated_get existence",
+      "expected_sources": [
+        {"relative_path": "backend/tests/test_authenticated_get.py", "symbol_name": "test_authenticated_get_exists"}
+      ]
+    },
+    {
+      "id": "tb-011",
+      "query": "where is listen key test defined",
+      "expected_sources": [
+        {"relative_path": "backend/tests/test_listen_key_method.py", "symbol_name": "test_listen_key_method_exists"}
+      ]
+    },
+    {
+      "id": "tb-012",
+      "query": "where is account info method test defined",
+      "expected_sources": [
+        {"relative_path": "backend/tests/test_account_info_method.py", "symbol_name": "test_account_info_method_exists"}
+      ]
+    },
+    {
+      "id": "tb-013",
+      "query": "which frontend service fetches active session",
+      "expected_sources": [
+        {"relative_path": "frontend/services/api.ts", "symbol_name": "fetchActiveSession"}
+      ]
+    },
+    {
+      "id": "tb-014",
+      "query": "which frontend function fetches overall analytics",
+      "expected_sources": [
+        {"relative_path": "frontend/services/api.ts", "symbol_name": "fetchOverallAnalytics"}
+      ]
+    },
+    {
+      "id": "tb-015",
+      "query": "which frontend function fetches session trade analytics",
+      "expected_sources": [
+        {"relative_path": "frontend/services/api.ts", "symbol_name": "fetchSessionTradeAnalytics"}
+      ]
+    },
+    {
+      "id": "tb-016",
+      "query": "where is fetchSessionById implemented in frontend",
+      "expected_sources": [
+        {"relative_path": "frontend/services/api.ts", "symbol_name": "fetchSessionById"}
+      ]
+    },
+    {
+      "id": "tb-017",
+      "query": "where is binance client creation test",
+      "expected_sources": [
+        {"relative_path": "backend/tests/test_binance_ws_validation.py", "symbol_name": "test_binance_client_creation"}
+      ]
+    },
+    {
+      "id": "tb-018",
+      "query": "where is binance client stop behavior tested",
+      "expected_sources": [
+        {"relative_path": "backend/tests/test_binance_ws_validation.py", "symbol_name": "test_binance_client_stop"}
+      ]
+    },
+    {
+      "id": "tb-019",
+      "query": "which test validates engine has rest client",
+      "expected_sources": [
+        {"relative_path": "backend/tests/test_binance_engine_dependencies.py", "symbol_name": "test_binance_engine_has_rest_client"}
+      ]
+    },
+    {
+      "id": "tb-020",
+      "query": "where is BinanceRestClient class defined",
+      "expected_sources": [
+        {"relative_path": "backend/src/exchange/binance_rest_client.py", "symbol_name": "BinanceRestClient"}
+      ]
+    }
+  ]
+}

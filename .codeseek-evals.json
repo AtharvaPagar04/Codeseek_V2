@@ -1,0 +1,114 @@
+[
+  {
+    "id": 1,
+    "query": "What is CodeSeek about? (DYNAMIC DEMO)",
+    "category": "Overview",
+    "intent": "general_context",
+    "files": ["README.md"]
+  },
+  {
+    "id": 2,
+    "query": "How is this codebase structured?",
+    "category": "Overview",
+    "intent": "technical_explanation (architecture)",
+    "files": ["README.md", "backend/retrieval/main.py"]
+  },
+  {
+    "id": 3,
+    "query": "What are the main backend modules?",
+    "category": "Overview",
+    "intent": "general_context",
+    "files": ["backend/retrieval/session_indexer.py", "backend/retrieval/generation/code_answers.py"]
+  },
+  {
+    "id": 4,
+    "query": "show me _require_auth code",
+    "category": "Code Snippet",
+    "intent": "code_snippet",
+    "files": ["backend/retrieval/api_service.py"]
+  },
+  {
+    "id": 5,
+    "query": "provide me the auth function code",
+    "category": "Code Snippet",
+    "intent": "code_snippet",
+    "files": ["backend/retrieval/api_service.py", "backend/retrieval/stores/auth_store.py"]
+  },
+  {
+    "id": 6,
+    "query": "show me the safe eval runner code",
+    "category": "Code Snippet",
+    "intent": "code_snippet",
+    "files": ["backend/evals/run_safe_evals.py"]
+  },
+  {
+    "id": 7,
+    "query": "show me the evaluation report API endpoint code",
+    "category": "Code Snippet",
+    "intent": "code_snippet",
+    "files": ["backend/retrieval/api_service.py", "backend/retrieval/support/eval_reports.py"]
+  },
+  {
+    "id": 8,
+    "query": "show me the Qdrant upsert code",
+    "category": "Code Snippet",
+    "intent": "code_snippet",
+    "files": ["backend/rag_ingestion/stages/storage.py"]
+  },
+  {
+    "id": 9,
+    "query": "Where is safe eval implemented?",
+    "category": "Source Location",
+    "intent": "code_location",
+    "files": ["backend/evals/run_safe_evals.py"]
+  },
+  {
+    "id": 10,
+    "query": "Where is evaluation report API implemented?",
+    "category": "Source Location",
+    "intent": "code_location",
+    "files": ["backend/retrieval/api_service.py"]
+  },
+  {
+    "id": 11,
+    "query": "show me safe eval docs",
+    "category": "Code Snippet",
+    "intent": "general_context",
+    "files": ["docs/product/diagnostics_panel.md", "backend/docs/retrieval_docs/evaluation_policy.md"]
+  },
+  {
+    "id": 12,
+    "query": "How does the retrieval pipeline work?",
+    "category": "Technical Explanation",
+    "intent": "technical_explanation",
+    "files": ["backend/docs/retrieval_docs/retrieval_pipeline_docs.md", "backend/retrieval/search/searcher.py"]
+  },
+  {
+    "id": 13,
+    "query": "Where is reranking handled in searcher.py?",
+    "category": "Source Location",
+    "intent": "code_location",
+    "files": ["backend/retrieval/search/searcher.py"]
+  },
+  {
+    "id": 14,
+    "query": "show me the Qdrant upsert code -> explain that",
+    "category": "Multi-turn / Follow-up",
+    "intent": "technical_explanation",
+    "files": ["backend/rag_ingestion/stages/storage.py"]
+  },
+  {
+    "id": 15,
+    "query": "Who wrote code_answers.py?",
+    "category": "Source Location",
+    "intent": "general_context",
+    "files": ["backend/retrieval/generation/code_answers.py"]
+  },
+  {
+    "id": 16,
+    "query": "how do I run tests?",
+    "category": "Overview",
+    "intent": "general_context",
+    "files": ["README.md", "backend/pytest.ini"]
+  }
+]

@@ -1,0 +1,51 @@
+{
+  "name": "multi-repo-retrieval-suite-v1",
+  "datasets": [
+    {
+      "id": "fixture_frontend_app",
+      "eval_file": "evals/datasets/eval_fixture_frontend_app.json",
+      "repo_root": "tests/fixtures/retrieval_repos/frontend_app",
+      "ingest_before_eval": true,
+      "recreate_collection": true,
+      "k": 10
+    },
+    {
+      "id": "fixture_backend_api",
+      "eval_file": "evals/datasets/eval_fixture_backend_api.json",
+      "repo_root": "tests/fixtures/retrieval_repos/backend_api",
+      "ingest_before_eval": true,
+      "recreate_collection": true,
+      "k": 10
+    },
+    {
+      "id": "fixture_infra_stack",
+      "eval_file": "evals/datasets/eval_fixture_infra_stack.json",
+      "repo_root": "tests/fixtures/retrieval_repos/infra_stack",
+      "ingest_before_eval": true,
+      "recreate_collection": true,
+      "k": 10
+    },
+    {
+      "id": "fixture_monorepo_mixed",
+      "eval_file": "evals/datasets/eval_fixture_monorepo_mixed.json",
+      "repo_root": "tests/fixtures/retrieval_repos/monorepo_mixed",
+      "ingest_before_eval": true,
+      "recreate_collection": true,
+      "k": 10
+    },
+    {
+      "id": "codeseek_exact_wording",
+      "eval_file": "evals/datasets/eval_codeseek_exact_wording.json",
+      "repo_root": "/home/arch/DEV/CodeSeek/backend",
+      "ingest_before_eval": true,
+      "k": 10
+    },
+    {
+      "id": "codeseek_flow_phase1",
+      "eval_file": "evals/datasets/eval_codeseek_flow_phase1.json",
+      "repo_root": "/home/arch/DEV/CodeSeek/backend",
+      "ingest_before_eval": false,
+      "k": 10
+    }
+  ]
+}

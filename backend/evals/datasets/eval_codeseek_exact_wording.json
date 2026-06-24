@@ -1,0 +1,116 @@
+{
+  "name": "codeseek-exact-wording-v1",
+  "repo_root_hint": "/home/arch/DEV/CodeSeek/backend",
+  "cases": [
+    {
+      "id": "cs-exact-001",
+      "query": "Where is CODESEEK_DATABASE_URL documented or used?",
+      "expected_files": [
+        ".env.example",
+        "docs/deployment_runbook.md"
+      ]
+    },
+    {
+      "id": "cs-exact-002",
+      "query": "Where is RETRIEVAL_ENABLE_LEXICAL configured?",
+      "expected_sources": [
+        {"relative_path": "retrieval/config.py"}
+      ],
+      "expected_files": [
+        "retrieval/config.py"
+      ]
+    },
+    {
+      "id": "cs-exact-003",
+      "query": "Which code invalidates the lexical index after ingestion?",
+      "expected_sources": [
+        {"relative_path": "retrieval/session_indexer.py", "symbol_name": "_index_job"},
+        {"relative_path": "retrieval/search/searcher.py", "symbol_name": "invalidate_lexical_index"}
+      ],
+      "expected_symbols": [
+        "invalidate_lexical_index"
+      ]
+    },
+    {
+      "id": "cs-exact-004",
+      "query": "Where is the qdrant-client dependency declared?",
+      "expected_files": [
+        "requirements.txt"
+      ],
+      "expected_dependencies": [
+        "qdrant-client"
+      ]
+    },
+    {
+      "id": "cs-exact-005",
+      "query": "Where is FastAPI declared as a dependency?",
+      "expected_files": [
+        "requirements.txt"
+      ],
+      "expected_frameworks": [
+        "fastapi"
+      ]
+    },
+    {
+      "id": "cs-exact-006",
+      "query": "Where is docker compose deployment described?",
+      "expected_files": [
+        "docker-compose.yml",
+        "docs/deployment_runbook.md"
+      ]
+    },
+    {
+      "id": "cs-exact-007",
+      "query": "Where is the submission-key endpoint implemented?",
+      "expected_sources": [
+        {"relative_path": "retrieval/api_service.py"}
+      ],
+      "expected_files": [
+        "retrieval/api_service.py"
+      ]
+    },
+    {
+      "id": "cs-exact-008",
+      "query": "Where is BAAI/bge-small-en-v1.5 configured?",
+      "expected_files": [
+        "retrieval/config.py"
+      ],
+      "expected_dependencies": [
+        "BAAI/bge-small-en-v1.5"
+      ]
+    },
+    {
+      "id": "cs-exact-009",
+      "query": "architecture overview",
+      "expected_files": [
+        "README.md",
+        "docker-compose.yml",
+        ".env.example"
+      ],
+      "expected_response_mode": "architecture_summary",
+      "expected_answer_terms": [
+        "Architecture Summary",
+        "Runtime Shape",
+        "Configuration And Deployment Boundaries"
+      ]
+    },
+    {
+      "id": "cs-exact-010",
+      "query": "does this repository use COBOL or Fortran language?",
+      "expected_response_mode": "llm",
+      "expected_answer_terms": []
+    },
+    {
+      "id": "cs-exact-011",
+      "query": "what is the purpose of CODESEEK_APP_ENCRYPTION_KEY?",
+      "expected_files": [
+        "retrieval/config.py",
+        ".env.example"
+      ],
+      "expected_response_mode": "llm",
+      "expected_answer_terms": [
+        "No LLM provider API key configured"
+      ]
+    }
+  ]
+}

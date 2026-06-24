@@ -1,0 +1,59 @@
+{
+  "name": "codeseek-retrieval-targeting-v1",
+  "repo_root_hint": "/home/arch/DEV/Portfolio",
+  "cases": [
+    {
+      "id": "rt-001-homepage-structure",
+      "query": "what does src/app/page.tsx do?",
+      "expected_files": ["src/app/page.tsx"],
+      "expected_exact_path_hit": true
+    },
+    {
+      "id": "rt-002-hero-typewriter",
+      "query": "explain Hero typewriter logic",
+      "expected_files": ["src/components/Hero.tsx"],
+      "expected_symbol_hit": true,
+      "expected_definition_boost": true
+    },
+    {
+      "id": "rt-003-portfolio-data-location",
+      "query": "where is portfolio data stored?",
+      "expected_files": ["src/lib/data.ts"],
+      "expected_central_file": true
+    },
+    {
+      "id": "rt-004-projects-rendering",
+      "query": "how are projects rendered?",
+      "expected_files": ["src/components/Projects.tsx", "src/lib/data.ts"],
+      "expected_definition_boost": true,
+      "expected_central_file": true
+    },
+    {
+      "id": "rt-005-starscanvas-purpose",
+      "query": "what does StarsCanvas do?",
+      "expected_files": ["src/components/StarsCanvas.tsx"],
+      "expected_symbol_hit": true,
+      "expected_definition_boost": true
+    },
+    {
+      "id": "rt-006-cgpa-value",
+      "query": "what is the CGPA?",
+      "expected_files": ["src/lib/data.ts"],
+      "expected_central_file": true,
+      "expected_numeric_values": ["7.75"],
+      "expected_answer_terms": ["7.75"]
+    },
+    {
+      "id": "rt-007-alias-resolution",
+      "query": "what does @/lib/data export?",
+      "expected_files": ["src/lib/data.ts"],
+      "expected_alias_resolution": true
+    },
+    {
+      "id": "rt-008-filename-only",
+      "query": "show me data.ts",
+      "expected_files": ["src/lib/data.ts"],
+      "expected_filename_hit": true
+    }
+  ]
+}
