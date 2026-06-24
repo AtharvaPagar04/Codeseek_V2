@@ -120,8 +120,10 @@ class ApiServiceGithubAuthTests(unittest.TestCase):
         self.assertEqual(kwargs["token_type"], "bearer")
 
     def test_auth_me_returns_unauthenticated_without_cookie(self) -> None:
-        response = api_service.auth_me(None)
-        self.assertEqual(response, {"authenticated": False})
+        from fastapi import HTTPException
+        with self.assertRaises(HTTPException) as cm:
+            api_service.auth_me(None)
+        self.assertEqual(cm.exception.status_code, 401)
 
     def test_auth_logout_clears_cookie(self) -> None:
         response = Response()

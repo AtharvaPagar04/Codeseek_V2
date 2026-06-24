@@ -40,6 +40,8 @@ export function useGitHub() {
         isConnected ? 'GitHub session expired. Reconnect to continue.' : current
       );
       setIsConnected(false);
+      setUsername(null);
+      setAvatarUrl(null);
     }
   }, [isConnected]);
 

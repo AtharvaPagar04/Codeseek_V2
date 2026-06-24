@@ -69,7 +69,7 @@ def test_query_stream_success():
          patch("retrieval.api_service._resolve_query_session", return_value=mock_session), \
          patch("retrieval.api_service.validate_collection_binding"), \
          patch("retrieval.api_service.run_query", side_effect=mock_run_query), \
-         patch("retrieval.api_service.append_thread_message") as mock_append:
+         patch("retrieval.api_service.append_thread_message", return_value={"id": "msg-1"}) as mock_append:
          
         client.cookies.set("codeseek_session", "dummy")
         response = client.post(
@@ -88,7 +88,7 @@ def test_query_stream_success():
         assert events[3]["sources"] == []
         assert events[3]["diagnostics"]["memory"]["history_injected"] is False
         assert events[3]["diagnostics"]["retrieval"]["candidate_count"] == 0
-        assert events[4] == {"type": "done"}
+        assert events[4] == {"type": "done", "message_id": "msg-1"}
         
         # The thread ID is randomly generated in ensure_default_thread, so we can assert on args
         # check that mock_append was called twice (once for user, once for assistant)
@@ -137,7 +137,7 @@ def test_query_stream_abort():
          patch("retrieval.api_service._resolve_query_session", return_value=mock_session), \
          patch("retrieval.api_service.validate_collection_binding"), \
          patch("retrieval.api_service.run_query", side_effect=mock_run_query), \
-         patch("retrieval.api_service.append_thread_message") as mock_append:
+         patch("retrieval.api_service.append_thread_message", return_value={"id": "msg-1"}) as mock_append:
          
         call_count = 0
         async def mock_is_disconnected():

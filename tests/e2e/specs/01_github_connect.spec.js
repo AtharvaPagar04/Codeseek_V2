@@ -80,10 +80,9 @@ test.describe('GitHub Connect — PAT flow', () => {
     const logoutBody = await logoutRes.json();
     expect(logoutBody.logged_out).toBe(true);
 
-    // /auth/me should now return unauthenticated
+    // /auth/me should now return 401 Unauthorized
     const meRes = await page.request.get(`${BACKEND_URL}/auth/me`);
-    const meBody = await meRes.json();
-    expect(meBody.authenticated).toBe(false);
+    expect(meRes.status()).toBe(401);
   });
 
   test('frontend shows "Connect GitHub" button when logged out', async ({ page }) => {

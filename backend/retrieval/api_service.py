@@ -656,6 +656,10 @@ def _optional_bearer_token(authorization: str | None) -> str | None:
     return token or None
 
 def _require_auth_user(session_token: str | None, authorization: str | None = None) -> dict:
+    user = _current_auth_user(session_token)
+    if user:
+        return user
+
     token = _optional_bearer_token(authorization)
     if token:
         expected = os.getenv(API_KEY_ENV, "").strip()
@@ -663,10 +667,7 @@ def _require_auth_user(session_token: str | None, authorization: str | None = No
             return {"id": "api-key", "login": "api-key"}
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    user = _current_auth_user(session_token)
-    if not user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    return user
+    raise HTTPException(status_code=401, detail="Authentication required")
 
 
 def _persist_github_login(access_token: str) -> dict:
@@ -2379,7 +2380,7 @@ def auth_github_token(body: GithubTokenConnectRequest, response: Response) -> di
 def auth_me(session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE)) -> dict:
     user = _current_auth_user(session_token)
     if not user:
-        return {"authenticated": False}
+        raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         github_connected = bool(get_github_credential(user["id"]))
     except ValueError:
