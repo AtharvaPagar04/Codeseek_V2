@@ -1,0 +1,160 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* CSS custom properties */
+:root {
+  --border: #262626;
+  --bg-base: #0a0a0a;
+}
+
+/* Base resets */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: #0a0a0a;
+  color: #f0f0f0;
+  font-family: 'Inter', 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Thin scrollbars */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #262626;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a3a;
+}
+
+/* Selection color */
+::selection {
+  background: rgba(255, 255, 255, 0.15);
+  color: #f0f0f0;
+}
+
+/* Focus rings */
+:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.3);
+  outline-offset: 2px;
+}
+
+/* Code block styling inside react-markdown */
+.prose-sm pre {
+  margin: 0.75rem 0;
+}
+
+.assistant-response {
+  font-size: 13.75px;
+  line-height: 1.65;
+}
+
+.assistant-response p {
+  margin: 0 0 0.75rem;
+}
+
+.assistant-response > p:first-child {
+  font-size: 13.75px;
+  line-height: 1.65;
+  color: #f0f0f0;
+}
+
+.assistant-response h1,
+.assistant-response h2,
+.assistant-response h3 {
+  margin: 1rem 0 0.45rem;
+  line-height: 1.3;
+}
+
+.assistant-response ul,
+.assistant-response ol {
+  margin: 0.4rem 0 0.75rem 1.1rem;
+  padding-left: 0.7rem;
+}
+
+.assistant-response li {
+  margin: 0.25rem 0;
+}
+
+/* Inline code — small pill that flows within sentences */
+.assistant-response code,
+.assistant-response .inline-code {
+  display: inline;
+  width: auto;
+  padding: 0.12rem 0.35rem;
+  margin: 0 0.08rem;
+  border-radius: 0.35rem;
+  font-size: 0.9em;
+  white-space: break-spaces;
+  vertical-align: baseline;
+  word-break: break-word;
+}
+
+/* Fenced code blocks — full-width with horizontal scroll */
+.assistant-response pre {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+}
+
+/* Code inside fenced blocks — override inline Tailwind utility classes */
+.assistant-response pre code {
+  display: block !important;
+  width: auto !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  white-space: pre !important;
+  font-size: 12.5px !important;
+  line-height: 1.55;
+  word-break: normal;
+}
+
+.assistant-response table tr:last-child td {
+  border-bottom: none;
+}
+
+/* Transition defaults */
+button, a {
+  cursor: pointer;
+}
+
+/* Remove default button appearance */
+button {
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* Hide details marker for custom styled details */
+details summary::-webkit-details-marker {
+  display: none;
+}
+details summary {
+  list-style: none;
+}

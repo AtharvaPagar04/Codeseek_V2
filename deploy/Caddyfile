@@ -1,0 +1,16 @@
+{$CODESEEK_FRONTEND_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy frontend:80
+}
+
+{$CODESEEK_API_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy codeseek-api:8000 {
+        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-Host {host}
+    }
+}
+
+{
+    email {$CODESEEK_ACME_EMAIL}
+}

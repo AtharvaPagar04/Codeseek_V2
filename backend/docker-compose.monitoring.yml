@@ -1,0 +1,60 @@
+# Monitoring overlay for Codeseek.
+#
+# Usage (alongside main docker-compose.yml):
+#   docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
+#
+# Services added:
+#   prometheus   — scrapes /api/v1/metrics, /healthz (Qdrant), pg_exporter
+#   alertmanager — receives Prometheus alert notifications
+#   pg_exporter  — exposes Postgres metrics for Prometheus
+#
+# Ports:
+#   9090  Prometheus UI
+#   9093  Alertmanager UI
+#   9187  postgres_exporter metrics
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--alertmanager.url=http://alertmanager:9093"
+    depends_on:
+      - alertmanager
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+
+  pg_exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    restart: unless-stopped
+    ports:
+      - "9187:9187"
+    environment:
+      DATA_SOURCE_NAME: ${CODESEEK_DATABASE_URL:-postgresql://codeseek:codeseek@postgres:5432/codeseek?sslmode=disable}
+    depends_on:
+      - postgres
+
+volumes:
+  prometheus_data:
+  alertmanager_data:
