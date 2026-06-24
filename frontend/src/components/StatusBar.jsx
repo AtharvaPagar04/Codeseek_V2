@@ -1,4 +1,6 @@
+import { useState, useEffect } from 'react';
 import { useHealth } from '../hooks/useHealth';
+import { listProviderCredentials } from '../utils/api';
 
 export default function StatusBar({
   ghUser,
@@ -12,6 +14,30 @@ export default function StatusBar({
   githubNotice,
 }) {
   const { status } = useHealth();
+  const [providerMode, setProviderMode] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchMode = async () => {
+      try {
+        const creds = await listProviderCredentials();
+        const active = creds.find(c => c.isActive);
+        if (!cancelled && active) {
+          setProviderMode(active.provider === 'local' ? 'Local' : 'Cloud');
+        } else if (!cancelled) {
+          setProviderMode(null);
+        }
+      } catch (e) {
+        // ignore
+      }
+    };
+    fetchMode();
+    window.addEventListener('CODESEEK_PROVIDER_CHANGED', fetchMode);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('CODESEEK_PROVIDER_CHANGED', fetchMode);
+    };
+  }, []);
 
   return (
     <header className="flex flex-col shrink-0 z-20 border-b border-border bg-surface/80 backdrop-blur-md">
@@ -60,9 +86,16 @@ export default function StatusBar({
                 : 'bg-text-muted animate-pulse'
             }`}
           />
-          <span className="text-xs text-text-muted hidden sm:inline">
-            {status === 'online' ? 'API Online' : status === 'offline' ? 'API Unreachable' : 'Checking…'}
-          </span>
+          <div className="flex flex-col">
+            <span className="text-xs text-text-muted hidden sm:inline leading-tight">
+              {status === 'online' ? 'API Online' : status === 'offline' ? 'API Unreachable' : 'Checking…'}
+            </span>
+            {providerMode && status === 'online' && (
+              <span className="text-2xs text-text-muted/70 font-mono hidden sm:inline leading-tight uppercase tracking-wider">
+                {providerMode}
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="w-px h-4 bg-border" />

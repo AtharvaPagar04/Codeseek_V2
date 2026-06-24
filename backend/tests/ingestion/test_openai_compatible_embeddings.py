@@ -19,7 +19,7 @@ def _cloud_config(**overrides) -> EmbeddingProviderConfig:
         provider="openai_compatible",
         base_url="https://api.example.com/v1/",
         api_key="super-secret-key",
-        model="openai/text-embedding-3-small",
+        model="text-embedding-3-small",
         batch_size=2,
         timeout_seconds=30.0,
         dimensions=0,
@@ -60,7 +60,7 @@ def test_cloud_embedding_request_shape(monkeypatch: pytest.MonkeyPatch):
     assert captured["url"] == "https://api.example.com/v1/embeddings"
     assert captured["headers"]["Authorization"] == "Bearer super-secret-key"
     assert captured["json"] == {
-        "model": "openai/text-embedding-3-small",
+        "model": "text-embedding-3-small",
         "input": ["text 1", "text 2"],
     }
     assert captured["timeout"] == 30.0

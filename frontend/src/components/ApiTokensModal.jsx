@@ -11,11 +11,38 @@ import { OPENAI_COMPATIBLE_EMBEDDING_MODELS, validateEmbeddingDimensions } from 
 
 export default function ApiTokensModal({ onClose }) {
   const [mode, setMode] = useState('api');
-  const [providerUrl, setProviderUrl] = useState('');
-  const [apiKey, setApiKey] = useState('');
-  const [llmModel, setLlmModel] = useState('');
-  const [embModel, setEmbModel] = useState('');
-  const [embDims, setEmbDims] = useState('');
+  const [profiles, setProfiles] = useState({
+    api: {
+      providerUrl: '',
+      apiKey: '',
+      llmModel: '',
+      embModel: '',
+      embDims: '',
+      hasProviderSecret: false,
+      hasEmbeddingSecret: false,
+    },
+    local: {
+      providerUrl: 'http://localhost:11434',
+      apiKey: '',
+      llmModel: 'qwen2.5-coder:3b',
+      embModel: 'nomic-embed-text:latest',
+      embDims: '768',
+      hasProviderSecret: false,
+      hasEmbeddingSecret: false,
+    }
+  });
+
+  const currentProfile = profiles[mode];
+
+  const handleProfileChange = (field, value) => {
+    setProfiles(prev => ({
+      ...prev,
+      [mode]: {
+        ...prev[mode],
+        [field]: value
+      }
+    }));
+  };
 
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
@@ -36,18 +63,59 @@ export default function ApiTokensModal({ onClose }) {
           getEmbeddingConfig().catch(() => null),
         ]);
         if (!cancelled) {
+          const apiLlm = llms.find(t => t.provider !== 'local') || llms[0];
+          const localLlm = llms.find(t => t.provider === 'local');
           const activeLlm = llms.find(t => t.isActive) || llms[0];
+
           if (activeLlm) {
             setActiveConfig(activeLlm);
-            setLlmModel(activeLlm.model || '');
           }
           if (emb) {
             setActiveEmbConfig(emb);
             setMode(emb.mode === 'local' ? 'local' : 'api');
-            setProviderUrl(emb.base_url || '');
-            setEmbModel(emb.model || '');
-            setEmbDims(emb.dimensions ? String(emb.dimensions) : '');
           }
+
+          setProfiles(prev => {
+            const next = { ...prev };
+
+            // Populate API profile
+            if (apiLlm) {
+              next.api.llmModel = apiLlm.model || '';
+              next.api.hasProviderSecret = apiLlm.has_secret || false;
+            }
+            if (emb && emb.profiles && emb.profiles.api) {
+              const apiEmb = emb.profiles.api;
+              next.api.providerUrl = apiEmb.base_url || '';
+              next.api.embModel = apiEmb.model || '';
+              next.api.embDims = apiEmb.dimensions ? String(apiEmb.dimensions) : '';
+              next.api.hasEmbeddingSecret = apiEmb.has_secret || false;
+            } else if (emb && emb.mode !== 'local') {
+              next.api.providerUrl = emb.base_url || '';
+              next.api.embModel = emb.model || '';
+              next.api.embDims = emb.dimensions ? String(emb.dimensions) : '';
+              next.api.hasEmbeddingSecret = emb.has_secret || false;
+            }
+
+            // Populate Local profile
+            if (localLlm) {
+              next.local.llmModel = localLlm.model || 'qwen2.5-coder:3b';
+              next.local.hasProviderSecret = localLlm.has_secret || false;
+            }
+            if (emb && emb.profiles && emb.profiles.local) {
+              const localEmb = emb.profiles.local;
+              next.local.providerUrl = localEmb.base_url || 'http://localhost:11434';
+              next.local.embModel = localEmb.model || 'nomic-embed-text:latest';
+              next.local.embDims = localEmb.dimensions ? String(localEmb.dimensions) : '768';
+              next.local.hasEmbeddingSecret = localEmb.has_secret || false;
+            } else if (emb && emb.mode === 'local') {
+              next.local.providerUrl = emb.base_url || 'http://localhost:11434';
+              next.local.embModel = emb.model || 'nomic-embed-text:latest';
+              next.local.embDims = emb.dimensions ? String(emb.dimensions) : '768';
+              next.local.hasEmbeddingSecret = emb.has_secret || false;
+            }
+
+            return next;
+          });
         }
       } catch (err) {
         if (!cancelled) setError(err.message || 'Failed to load configurations.');
@@ -68,7 +136,7 @@ export default function ApiTokensModal({ onClose }) {
   const validate = () => {
     setError(null);
     setSuccessMsg(null);
-    let url = providerUrl.trim();
+    let url = currentProfile.providerUrl.trim();
 
     if (!url) {
       setError('Provider URL is required.');
@@ -81,22 +149,27 @@ export default function ApiTokensModal({ onClose }) {
     }
 
     if (mode === 'api') {
-      if (!apiKey.trim() && !activeEmbConfig?.has_secret && !activeConfig) {
+      const hasUsableCloudKey =
+        currentProfile.apiKey.trim() ||
+        currentProfile.hasProviderSecret ||
+        currentProfile.hasEmbeddingSecret;
+
+      if (!hasUsableCloudKey) {
         setError('API Key is required for API Provider mode.');
         return false;
       }
     }
-    if (!llmModel.trim()) {
+    if (!currentProfile.llmModel.trim()) {
       setError('LLM Model is required.');
       return false;
     }
-    if (!embModel.trim()) {
+    if (!currentProfile.embModel.trim()) {
       setError('Embedding Model is required.');
       return false;
     }
 
     if (mode === 'api') {
-      const dimError = validateEmbeddingDimensions(mode, embModel, embDims);
+      const dimError = validateEmbeddingDimensions(mode, currentProfile.embModel, currentProfile.embDims);
       if (dimError) {
         setError(dimError);
         return false;
@@ -115,10 +188,10 @@ export default function ApiTokensModal({ onClose }) {
       const payload = {
         mode,
         provider: mode === 'local' ? 'local' : 'openai_compatible',
-        baseUrl: providerUrl.trim().replace(/\/+$/, ''),
-        model: embModel.trim(),
-        apiKey: apiKey.trim(),
-        dimensions: embDims ? parseInt(embDims, 10) : undefined,
+        baseUrl: currentProfile.providerUrl.trim().replace(/\/+$/, ''),
+        model: currentProfile.embModel.trim(),
+        apiKey: currentProfile.apiKey.trim(),
+        dimensions: currentProfile.embDims ? parseInt(currentProfile.embDims, 10) : undefined,
       };
       const result = await testEmbeddingConfig(payload);
       testMsg = `Embedding config tested successfully! Dimensions: ${result.dimensions}, Model: ${result.model}. LLM test skipped.`;
@@ -134,7 +207,7 @@ export default function ApiTokensModal({ onClose }) {
     e.preventDefault();
     if (!validate()) return;
     setSaving(true);
-    let url = providerUrl.trim().replace(/\/+$/, '');
+    let url = currentProfile.providerUrl.trim().replace(/\/+$/, '');
 
     try {
       // Save LLM credential
@@ -142,23 +215,28 @@ export default function ApiTokensModal({ onClose }) {
         mode,
         provider: mode === 'local' ? 'local' : 'aicredits',
         label: mode === 'local' ? 'Local Provider' : 'OpenAI-Compatible Provider',
-        apiKey: apiKey.trim(),
-        model: llmModel.trim(),
+        apiKey: currentProfile.apiKey.trim(),
+        model: currentProfile.llmModel.trim(),
         isActive: true,
       });
       setActiveConfig(created);
+
+      handleProfileChange('hasProviderSecret', true);
+      handleProfileChange('apiKey', '');
 
       // Save Embedding config
       const payload = {
         mode,
         provider: mode === 'local' ? 'local' : 'openai_compatible',
         baseUrl: url,
-        model: embModel.trim(),
-        apiKey: apiKey.trim(),
-        dimensions: embDims ? parseInt(embDims, 10) : undefined,
+        model: currentProfile.embModel.trim(),
+        apiKey: currentProfile.apiKey.trim(),
+        dimensions: currentProfile.embDims ? parseInt(currentProfile.embDims, 10) : undefined,
       };
       const updatedEmb = await saveEmbeddingConfig(payload);
       setActiveEmbConfig(updatedEmb);
+
+      handleProfileChange('hasEmbeddingSecret', true);
 
       setSuccessMsg('Configuration saved successfully. Note: changing embedding settings may require reindexing active sessions.');
       window.dispatchEvent(new Event('CODESEEK_PROVIDER_CHANGED'));
@@ -237,33 +315,14 @@ export default function ApiTokensModal({ onClose }) {
               <button
                 type="button"
                 className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${mode === 'local' ? 'bg-surface-0 shadow-sm text-text-primary' : 'text-text-muted hover:text-text-primary'}`}
-                onClick={() => {
-                  setMode('local');
-                  if (!providerUrl || providerUrl.includes('api.')) setProviderUrl('http://localhost:11434');
-                  if (!llmModel) setLlmModel('qwen2.5-coder:3b');
-
-                  if (!embModel || OPENAI_COMPATIBLE_EMBEDDING_MODELS[embModel.trim()]) {
-                    setEmbModel('nomic-embed-text:latest');
-                  }
-                  if (!embDims || embDims === '0' || OPENAI_COMPATIBLE_EMBEDDING_MODELS[embModel?.trim()]) {
-                    setEmbDims('768');
-                  }
-                }}
+                onClick={() => setMode('local')}
               >
                 Local Dev
               </button>
               <button
                 type="button"
                 className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${mode === 'api' ? 'bg-surface-0 shadow-sm text-text-primary' : 'text-text-muted hover:text-text-primary'}`}
-                onClick={() => {
-                  setMode('api');
-                  if (!embModel || embModel === 'nomic-embed-text:latest' || embModel === 'BAAI/bge-small-en-v1.5') {
-                    setEmbModel('openai/text-embedding-3-large');
-                  }
-                  if (String(embDims) === '768' || String(embDims) === '384') {
-                    setEmbDims('0');
-                  }
-                }}
+                onClick={() => setMode('api')}
               >
                 API Provider
               </button>
@@ -277,8 +336,8 @@ export default function ApiTokensModal({ onClose }) {
               <label className="text-2xs font-mono text-text-muted uppercase">Provider API URL</label>
               <input
                 type="text"
-                value={providerUrl}
-                onChange={(e) => setProviderUrl(e.target.value)}
+                value={currentProfile.providerUrl}
+                onChange={(e) => handleProfileChange('providerUrl', e.target.value)}
                 placeholder={mode === 'local' ? 'http://localhost:11434' : 'https://api.openai.com/v1'}
                 className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
                 required
@@ -291,11 +350,11 @@ export default function ApiTokensModal({ onClose }) {
                 <label className="text-2xs font-mono text-text-muted uppercase">API Key</label>
                 <input
                   type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={(activeConfig || activeEmbConfig) ? "•••••••• (Saved)" : "Enter API key"}
+                  value={currentProfile.apiKey}
+                  onChange={(e) => handleProfileChange('apiKey', e.target.value)}
+                  placeholder={(currentProfile.hasProviderSecret || currentProfile.hasEmbeddingSecret) ? "•••••••• (Saved)" : "Enter API key"}
                   className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
-                  required={!(activeConfig || activeEmbConfig)}
+                  required={!(currentProfile.hasProviderSecret || currentProfile.hasEmbeddingSecret)}
                 />
                 <p className="text-[11px] text-text-muted mt-0.5">Used securely for LLM and embedding requests.</p>
               </div>
@@ -305,8 +364,8 @@ export default function ApiTokensModal({ onClose }) {
               <label className="text-2xs font-mono text-text-muted uppercase">LLM Model</label>
               <input
                 type="text"
-                value={llmModel}
-                onChange={(e) => setLlmModel(e.target.value)}
+                value={currentProfile.llmModel}
+                onChange={(e) => handleProfileChange('llmModel', e.target.value)}
                 placeholder="e.g. gpt-4o-mini or deepseek/deepseek-v4-flash"
                 className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
                 required
@@ -317,8 +376,8 @@ export default function ApiTokensModal({ onClose }) {
               <label className="text-2xs font-mono text-text-muted uppercase">Embedding Model</label>
               <input
                 type="text"
-                value={embModel}
-                onChange={(e) => setEmbModel(e.target.value)}
+                value={currentProfile.embModel}
+                onChange={(e) => handleProfileChange('embModel', e.target.value)}
                 placeholder="e.g. text-embedding-3-small"
                 className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
                 required
@@ -328,7 +387,7 @@ export default function ApiTokensModal({ onClose }) {
             <div className="flex flex-col gap-1">
               <label className="text-2xs font-mono text-text-muted uppercase">Embedding Dimensions</label>
               {(() => {
-                const modelName = embModel.trim();
+                const modelName = currentProfile.embModel.trim();
                 let isKnownApi = false;
                 let allowed = [];
                 if (mode === 'api' && OPENAI_COMPATIBLE_EMBEDDING_MODELS[modelName]) {
@@ -339,8 +398,8 @@ export default function ApiTokensModal({ onClose }) {
                 if (isKnownApi) {
                   return (
                     <select
-                      value={embDims || '0'}
-                      onChange={(e) => setEmbDims(e.target.value)}
+                      value={currentProfile.embDims || '0'}
+                      onChange={(e) => handleProfileChange('embDims', e.target.value)}
                       className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-primary font-mono focus:outline-none focus:border-text-muted"
                     >
                       <option value="0">Auto (Recommended)</option>
@@ -348,8 +407,8 @@ export default function ApiTokensModal({ onClose }) {
                         <option key={d} value={String(d)}>{d}</option>
                       ))}
                       {/* Hidden option in case the state has an invalid value so it doesn't default to the first option silently */}
-                      {embDims && embDims !== '0' && !allowed.includes(parseInt(embDims, 10)) && (
-                        <option value={embDims} className="hidden">{embDims} (Invalid)</option>
+                      {currentProfile.embDims && currentProfile.embDims !== '0' && !allowed.includes(parseInt(currentProfile.embDims, 10)) && (
+                        <option value={currentProfile.embDims} className="hidden">{currentProfile.embDims} (Invalid)</option>
                       )}
                     </select>
                   );
@@ -357,8 +416,8 @@ export default function ApiTokensModal({ onClose }) {
                   return (
                     <input
                       type="number"
-                      value={embDims}
-                      onChange={(e) => setEmbDims(e.target.value)}
+                      value={currentProfile.embDims}
+                      onChange={(e) => handleProfileChange('embDims', e.target.value)}
                       placeholder={mode === 'local' ? "e.g. 768" : "Optional (e.g. 1536)"}
                       className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
                     />

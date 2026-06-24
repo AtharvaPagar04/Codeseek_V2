@@ -8,7 +8,7 @@ os.environ["CODESEEK_APP_ENCRYPTION_KEY"] = "test-encryption-key-for-unit-tests-
 
 from retrieval.api_service import app
 from retrieval.db import init_db
-from retrieval.stores.embedding_store import clear_embedding_config, get_embedding_config
+from retrieval.stores.embedding_store import clear_embedding_config, get_embedding_config, get_embedding_config_with_secret
 from retrieval.stores.auth_store import get_or_create_system_user, create_auth_session
 
 
@@ -18,7 +18,7 @@ def auth_client():
     user = get_or_create_system_user()
     clear_embedding_config(user["id"])
     token, _ = create_auth_session(user["id"])
-    
+
     client = TestClient(app)
     client.cookies.set("codeseek_session", token)
     return client, user
@@ -45,7 +45,7 @@ def test_put_embedding_config_local(auth_client):
     assert data["provider"] == "local"
     assert data["source"] == "stored"
     assert "api_key" not in data
-    
+
     saved = get_embedding_config(user["id"])
     assert saved["provider"] == "local"
 
@@ -169,7 +169,7 @@ def test_put_embedding_config_openai_compatible(auth_client):
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "openai/text-embedding-3-small",
+        "model": "text-embedding-3-small",
         "api_key": "test_secret_key",
         "dimensions": 1536
     }
@@ -180,8 +180,8 @@ def test_put_embedding_config_openai_compatible(auth_client):
     assert data["base_url"] == "https://api.example.com"
     assert data["has_secret"] is True
     assert "api_key" not in data
-    
-    saved = get_embedding_config(user["id"])
+
+    saved = get_embedding_config_with_secret(user["id"])
     assert saved["api_key"] == "test_secret_key"
 
 
@@ -196,38 +196,38 @@ def test_put_embedding_config_missing_fields(auth_client):
 
 def test_put_embedding_config_empty_key_keeps_existing(auth_client):
     client, user = auth_client
-    
+
     # First save with key
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "openai/text-embedding-3-small",
+        "model": "text-embedding-3-small",
         "api_key": "original_key",
         "dimensions": 1536
     }
     client.put("/api/v1/embedding/config", json=payload)
-    
+
     # Update without key
     payload2 = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com/v2",
-        "model": "openai/text-embedding-3-small",
+        "model": "text-embedding-3-small",
         "api_key": "",
         "dimensions": 1536
     }
     resp = client.put("/api/v1/embedding/config", json=payload2)
     assert resp.status_code == 200, resp.json()
-    
-    saved = get_embedding_config(user["id"])
+
+    saved = get_embedding_config_with_secret(user["id"])
     assert saved["api_key"] == "original_key"
 
 
 def test_test_endpoint_mocks_cloud(auth_client, monkeypatch):
     client, user = auth_client
-    
+
     class MockProvider:
         provider_name = "openai_compatible"
-        model_name = "openai/text-embedding-3-small"
+        model_name = "text-embedding-3-small"
         dimensions = 512
         def embed_query(self, text):
             return [0.1] * 512
@@ -237,7 +237,7 @@ def test_test_endpoint_mocks_cloud(auth_client, monkeypatch):
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "openai/text-embedding-3-small",
+        "model": "text-embedding-3-small",
         "api_key": "test_key",
         "dimensions": 512
     }
@@ -266,7 +266,7 @@ def test_put_embedding_config_invalid_dimensions(auth_client):
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "openai/text-embedding-3-small",
+        "model": "text-embedding-3-small",
         "api_key": "test_secret_key",
         "dimensions": 128
     }
@@ -279,7 +279,7 @@ def test_put_embedding_config_large_model_dimensions(auth_client):
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "openai/text-embedding-3-large",
+        "model": "text-embedding-3-large",
         "api_key": "test_secret_key",
         "dimensions": 0  # 0 means auto, which should be accepted
     }
@@ -301,21 +301,21 @@ def test_put_embedding_config_large_model_dimensions(auth_client):
 
 def test_get_latest_indexing_job_includes_embedding_metadata(auth_client):
     client, user = auth_client
-    
+
     # Create a mock session
     from retrieval.db import db_cursor
     import uuid
     from datetime import datetime, timezone
-    
+
     session_id = str(uuid.uuid4())
     job_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
-    
+
     with db_cursor() as (conn, cursor):
         cursor.execute(
             """
             INSERT INTO repo_sessions (id, tenant_id, user_id, repo_full_name, repo_url, repo_root, collection, status, created_at, updated_at, embedding_provider, embedding_model, embedding_dimensions)
-            VALUES (?, 'prod', ?, 'test/repo', 'https://github.com/test/repo', '/tmp/repo', 'collection', 'ready', ?, ?, 'openai_compatible', 'openai/text-embedding-3-small', 1536)
+            VALUES (?, 'prod', ?, 'test/repo', 'https://github.com/test/repo', '/tmp/repo', 'collection', 'ready', ?, ?, 'openai_compatible', 'text-embedding-3-small', 1536)
             """,
             (session_id, user["id"], now, now)
         )
@@ -326,11 +326,123 @@ def test_get_latest_indexing_job_includes_embedding_metadata(auth_client):
             """,
             (job_id, session_id, now, now)
         )
-        
+
     response = client.get(f"/api/v1/sessions/{session_id}/indexing-job/latest")
     assert response.status_code == 200
     data = response.json()
     assert data["latest_job"] is not None
     assert data["latest_job"]["embedding_provider"] == "openai_compatible"
-    assert data["latest_job"]["embedding_model"] == "openai/text-embedding-3-small"
+    assert data["latest_job"]["embedding_model"] == "text-embedding-3-small"
     assert data["latest_job"]["embedding_dimensions"] == 1536
+
+def test_local_embedding_does_not_overwrite_cloud_profile(auth_client, monkeypatch):
+    import retrieval.api_service as api_service
+    monkeypatch.setattr(api_service, "CODESEEK_ALLOW_LOCAL_PROVIDER", True)
+    client, user = auth_client
+    # 1. Save Cloud embedding
+    payload1 = {
+        "mode": "api",
+        "provider": "openai_compatible",
+        "base_url": "https://api.example.com",
+        "model": "text-embedding-3-small",
+        "api_key": "cloud-secret-key",
+        "dimensions": 1536
+    }
+    r1 = client.put("/api/v1/embedding/config", json=payload1)
+    assert r1.status_code == 200
+
+    # 2. Save Local embedding
+    payload2 = {
+        "mode": "local",
+        "provider": "local",
+        "base_url": "http://localhost:11434",
+        "model": "nomic-embed-text:latest",
+        "api_key": "",
+        "dimensions": 768
+    }
+    r2 = client.put("/api/v1/embedding/config", json=payload2)
+    assert r2.status_code == 200
+
+    # 3. GET config and assert Cloud profile is still intact
+    r3 = client.get("/api/v1/embedding/config")
+    assert r3.status_code == 200
+    data = r3.json()
+    assert data["mode"] == "local"
+    assert data["provider"] == "local"
+
+    assert "profiles" in data
+    assert "api" in data["profiles"]
+    api_prof = data["profiles"]["api"]
+    assert api_prof["provider"] == "openai_compatible"
+    assert api_prof["base_url"] == "https://api.example.com"
+    assert api_prof["model"] == "text-embedding-3-small"
+    assert api_prof["has_secret"] is True
+
+def test_cloud_embedding_reuses_saved_secret_after_local_switch(auth_client, monkeypatch):
+    import retrieval.api_service as api_service
+    monkeypatch.setattr(api_service, "CODESEEK_ALLOW_LOCAL_PROVIDER", True)
+    client, user = auth_client
+    # 1. Save Cloud embedding
+    client.put("/api/v1/embedding/config", json={
+        "mode": "api",
+        "provider": "openai_compatible",
+        "base_url": "https://api.example.com",
+        "model": "text-embedding-3-small",
+        "api_key": "cloud-secret-key",
+        "dimensions": 1536
+    })
+
+    # 2. Save Local embedding
+    client.put("/api/v1/embedding/config", json={
+        "mode": "local",
+        "provider": "local",
+        "base_url": "http://localhost:11434",
+        "model": "nomic-embed-text:latest",
+        "api_key": "",
+        "dimensions": 768
+    })
+
+    # 3. Save Cloud again with no API key
+    r3 = client.put("/api/v1/embedding/config", json={
+        "mode": "api",
+        "provider": "openai_compatible",
+        "base_url": "https://api.example.com/v2",
+        "model": "text-embedding-3-large",
+        "api_key": "",
+        "dimensions": 3072
+    })
+
+    assert r3.status_code == 200
+    assert r3.json()["has_secret"] is True
+    assert r3.json()["base_url"] == "https://api.example.com/v2"
+
+def test_get_embedding_config_returns_profiles(auth_client, monkeypatch):
+    import retrieval.api_service as api_service
+    monkeypatch.setattr(api_service, "CODESEEK_ALLOW_LOCAL_PROVIDER", True)
+    client, user = auth_client
+    # Save both profiles
+    client.put("/api/v1/embedding/config", json={
+        "mode": "api",
+        "provider": "openai_compatible",
+        "base_url": "https://api.example.com",
+        "model": "text-embedding-3-small",
+        "api_key": "cloud-secret-key",
+        "dimensions": 1536
+    })
+    client.put("/api/v1/embedding/config", json={
+        "mode": "local",
+        "provider": "local",
+        "base_url": "http://localhost:11434",
+        "model": "nomic-embed-text:latest",
+        "api_key": "",
+        "dimensions": 768
+    })
+
+    r = client.get("/api/v1/embedding/config")
+    data = r.json()
+    assert "profiles" in data
+    assert "local" in data["profiles"]
+    assert "api" in data["profiles"]
+
+    assert data["profiles"]["local"]["provider"] == "local"
+    assert data["profiles"]["api"]["provider"] == "openai_compatible"

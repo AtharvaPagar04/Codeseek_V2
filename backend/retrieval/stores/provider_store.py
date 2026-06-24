@@ -81,7 +81,8 @@ def create_provider_credential(
             existing = cursor.execute(
                 """
                 SELECT encrypted_api_key FROM user_provider_credentials
-                WHERE user_id = ? AND provider = ? AND is_active = 1
+                WHERE user_id = ? AND provider = ? AND encrypted_api_key IS NOT NULL AND encrypted_api_key != ''
+                ORDER BY updated_at DESC, created_at DESC
                 LIMIT 1
                 """,
                 (user_id, provider)

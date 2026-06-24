@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS user_provider_credentials (
 );
 
 CREATE TABLE IF NOT EXISTS user_embedding_configs (
-    user_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
     provider TEXT NOT NULL,
     base_url TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL DEFAULT '',
@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS user_embedding_configs (
     batch_size INTEGER NOT NULL DEFAULT 64,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    PRIMARY KEY(user_id, provider),
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
@@ -320,6 +321,29 @@ def _init_sqlite(db_path: Path) -> None:
             row[1]
             for row in conn.execute("PRAGMA table_info(repo_sessions)").fetchall()
         }
+        emb_pk = conn.execute("PRAGMA table_info(user_embedding_configs)").fetchall()
+        pk_cols = [row[1] for row in emb_pk if row[5] > 0]
+        if len(pk_cols) == 1 and pk_cols[0] == "user_id":
+            conn.execute("ALTER TABLE user_embedding_configs RENAME TO user_embedding_configs_old")
+            conn.execute("""
+                CREATE TABLE user_embedding_configs (
+                    user_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    base_url TEXT NOT NULL DEFAULT '',
+                    model TEXT NOT NULL DEFAULT '',
+                    encrypted_api_key TEXT NOT NULL DEFAULT '',
+                    dimensions INTEGER NOT NULL DEFAULT 0,
+                    timeout_seconds REAL NOT NULL DEFAULT 60.0,
+                    batch_size INTEGER NOT NULL DEFAULT 64,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(user_id, provider),
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute("INSERT INTO user_embedding_configs (user_id, provider, base_url, model, encrypted_api_key, dimensions, timeout_seconds, batch_size, created_at, updated_at) SELECT user_id, provider, base_url, model, encrypted_api_key, dimensions, timeout_seconds, batch_size, created_at, updated_at FROM user_embedding_configs_old")
+            conn.execute("DROP TABLE user_embedding_configs_old")
+
         if "user_id" not in repo_columns:
             conn.execute(
                 "ALTER TABLE repo_sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT ''"
@@ -406,6 +430,19 @@ def _init_postgres(database_url: str) -> None:
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         with conn.cursor() as cursor:
             cursor.execute(_postgres_schema_sql())
+            cursor.execute("""
+                SELECT a.attname
+                FROM   pg_index i
+                JOIN   pg_attribute a ON a.attrelid = i.indrelid
+                                     AND a.attnum = ANY(i.indkey)
+                WHERE  i.indrelid = 'user_embedding_configs'::regclass
+                AND    i.indisprimary;
+            """)
+            pk_cols = [row["attname"] for row in cursor.fetchall()]
+            if len(pk_cols) == 1 and pk_cols[0] == "user_id":
+                cursor.execute("ALTER TABLE user_embedding_configs DROP CONSTRAINT user_embedding_configs_pkey")
+                cursor.execute("ALTER TABLE user_embedding_configs ADD PRIMARY KEY (user_id, provider)")
+
             if not _postgres_has_column(cursor, "repo_sessions", "user_id"):
                 cursor.execute(
                     "ALTER TABLE repo_sessions ADD COLUMN user_id TEXT NOT NULL DEFAULT ''"

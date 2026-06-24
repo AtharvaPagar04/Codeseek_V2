@@ -32,10 +32,10 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
             },
             {
                 "chunk_id": "c3",
-                "relative_path": "frontend/src/components/EvaluationPanel.jsx",
+                "relative_path": "frontend/src/components/SessionView.jsx",
                 "language": "javascript",
                 "labels": ["frontend"],
-                "symbol_name": "EvaluationPanel",
+                "symbol_name": "SessionView",
                 "summary": "React component for displaying evaluation results.",
                 "code_intent": "ui rendering panel"
             },
@@ -60,7 +60,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
     def test_repo_profile_building(self):
         # Test files are populated correctly
         self.assertIn("backend/auth/auth_service.py", self.profile.files)
-        self.assertIn("frontend/src/components/EvaluationPanel.jsx", self.profile.files)
+        self.assertIn("frontend/src/components/SessionView.jsx", self.profile.files)
         self.assertEqual(len(self.profile.files), 5)
         
         # Test symbols are populated correctly
@@ -73,7 +73,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
             "tests"
         )
         self.assertEqual(
-            self.profile.classify_source_kind("frontend/src/components/EvaluationPanel.jsx", "javascript", None),
+            self.profile.classify_source_kind("frontend/src/components/SessionView.jsx", "javascript", None),
             "frontend"
         )
         self.assertEqual(
@@ -105,7 +105,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
         self.assertEqual(penalty, 0.0)
         self.assertEqual(details["kind"], "backend")
         
-        # 2. Implementation Query: EvaluationPanel in frontend/src/components/EvaluationPanel.jsx
+        # 2. Implementation Query: SessionView in frontend/src/components/SessionView.jsx
         # Since the query is implementation-style and doesn't mention ui/frontend/etc., it should receive a frontend penalty.
         item_fe = self.mock_payloads[2]
         boost, penalty, details = compute_dynamic_boosts_and_penalties(
@@ -178,21 +178,21 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
         from retrieval.search.source_filter import apply_feature_location_gate
         sources = [
             {"relative_path": "backend/retrieval/search/source_filter.py", "expansion_type": "primary", "summary": "exact file context pruning"},
-            {"relative_path": "frontend/src/components/EvaluationPanel.jsx", "expansion_type": "primary"}
+            {"relative_path": "frontend/src/components/SessionView.jsx", "expansion_type": "primary"}
         ]
         gated, diag = apply_feature_location_gate("Where is exact file context pruning implemented?", sources)
         self.assertTrue(diag["enabled"])
-        self.assertIn("frontend/src/components/EvaluationPanel.jsx", diag["demoted_paths"])
+        self.assertIn("frontend/src/components/SessionView.jsx", diag["demoted_paths"])
         
     def test_feature_location_gate_semantic_targeting(self):
         from retrieval.search.source_filter import apply_feature_location_gate
         sources = [
             {"relative_path": "backend/retrieval/query/semantic_targeting.py", "expansion_type": "primary"},
-            {"relative_path": "frontend/src/components/EvaluationPanel.jsx", "expansion_type": "primary"}
+            {"relative_path": "frontend/src/components/SessionView.jsx", "expansion_type": "primary"}
         ]
         gated, diag = apply_feature_location_gate("How does component semantic targeting work?", sources)
         self.assertTrue(diag["enabled"])
-        self.assertIn("frontend/src/components/EvaluationPanel.jsx", diag["demoted_paths"])
+        self.assertIn("frontend/src/components/SessionView.jsx", diag["demoted_paths"])
         
     def test_feature_location_gate_frontend_exception(self):
         from retrieval.search.source_filter import apply_feature_location_gate

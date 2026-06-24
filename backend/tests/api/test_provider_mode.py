@@ -219,3 +219,49 @@ def test_local_provider_no_key_succeeds(auth_client):
     }
     r = client.post("/api/v1/provider-credentials", json=payload)
     assert r.status_code == 200
+
+def test_switching_from_local_to_cloud_reuses_inactive_secret(auth_client):
+    client, user = auth_client
+    # 1. Save Cloud provider with API key
+    payload1 = {
+        "mode": "api",
+        "provider": "aicredits",
+        "label": "Test Provider 1",
+        "model": "test-model-1",
+        "api_key": "my-secret",
+        "is_active": True
+    }
+    r1 = client.post("/api/v1/provider-credentials", json=payload1)
+    assert r1.status_code == 200
+
+    # 2. Save Local provider without API key
+    payload2 = {
+        "mode": "local",
+        "provider": "local",
+        "label": "Local Mode",
+        "model": "qwen2.5-coder:3b",
+        "api_key": "",
+        "is_active": True
+    }
+    r2 = client.post("/api/v1/provider-credentials", json=payload2)
+    assert r2.status_code == 200
+
+    # 3. Save Cloud provider again with no API key
+    payload3 = {
+        "mode": "api",
+        "provider": "aicredits",
+        "label": "Test Provider 3",
+        "model": "test-model-3",
+        "api_key": "",
+        "is_active": True
+    }
+    r3 = client.post("/api/v1/provider-credentials", json=payload3)
+    assert r3.status_code == 200
+    assert r3.json()["provider_credential"]["model"] == "test-model-3"
+
+    # 4. Assert active Cloud credential has has_secret: true
+    r4 = client.get("/api/v1/provider-credentials")
+    creds = r4.json()["provider_credentials"]
+    active = next(c for c in creds if c["is_active"])
+    assert active["model"] == "test-model-3"
+    assert active["has_secret"] is True
