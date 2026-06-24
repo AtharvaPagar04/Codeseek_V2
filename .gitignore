@@ -55,3 +55,4 @@ backend/data/
 *.db
 *.sqlite
 *.sqlite3
+frontend/.vite/

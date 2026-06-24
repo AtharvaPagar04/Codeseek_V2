@@ -195,10 +195,35 @@ def get_or_create_system_user() -> dict:
         ).fetchone()
         if row:
             return _row_to_user(row)
-    
+
     # Fallback: create a system user if none exists
     return upsert_github_user(
         "system_github_id",
         "system_user",
         "https://avatars.githubusercontent.com/u/9919?v=4"
     )
+
+def ensure_api_user(user: dict) -> dict:
+    """Ensure a user from the API layer exists in the DB to satisfy foreign keys."""
+    if not user or not user.get("id"):
+        return user
+
+    user_id = user["id"]
+    login = user.get("login") or user.get("username") or user_id
+    avatar = user.get("avatar_url") or ""
+
+    with db_cursor() as (_conn, cursor):
+        row = cursor.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row:
+            return user
+
+        # Insert them directly so their API-layer ID matches the DB ID
+        now = _now_iso()
+        cursor.execute(
+            """
+            INSERT INTO users (id, github_user_id, username, avatar_url, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, user_id, login, avatar, now, now)
+        )
+        return user

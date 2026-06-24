@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/hooks/useSessions.test.js src/utils/api.test.js"
+    "test": "node --test src/hooks/useSessions.test.js src/utils/api.test.js src/components/ApiTokensModal.test.js"
   },
   "dependencies": {
     "date-fns": "^3.6.0",

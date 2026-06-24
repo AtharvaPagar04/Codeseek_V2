@@ -2,6 +2,11 @@ import { getBackendApiKey } from './storage.js';
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL?.replace(/\/$/, "") || 'http://127.0.0.1:8000';
 
+const safeGetLocalStorage = (key) => {
+  if (typeof localStorage === 'undefined') return null;
+  return localStorage.getItem(key);
+};
+
 const authHeaders = (extra = {}) => {
   const headers = {
     'Content-Type': 'application/json',
@@ -11,11 +16,11 @@ const authHeaders = (extra = {}) => {
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
-  const customKey = localStorage.getItem('CODESEEK_CUSTOM_ENCRYPTION_KEY');
+  const customKey = safeGetLocalStorage('CODESEEK_CUSTOM_ENCRYPTION_KEY');
   if (customKey) {
     headers['X-App-Encryption-Key'] = customKey.trim();
   }
-  const modelOverride = localStorage.getItem('CODESEEK_ACTIVE_MODEL_OVERRIDE');
+  const modelOverride = safeGetLocalStorage('CODESEEK_ACTIVE_MODEL_OVERRIDE');
   if (modelOverride) {
     headers['X-App-Model-Override'] = modelOverride.trim();
   }
@@ -511,20 +516,20 @@ export const listProviderCredentials = async () => {
   }));
 };
 
-export const createProviderCredential = async ({ provider, label, apiKey, model = '', isActive }) => {
+export const createProviderCredential = async ({ mode, provider, label, apiKey, model = '', isActive }) => {
   const normalizedProvider = `${provider || ''}`.trim().toLowerCase();
   const normalizedApiKey = `${apiKey || ''}`.trim();
   const encryptedSecret =
-    normalizedProvider === 'local' && !normalizedApiKey
+    mode === 'local' || (normalizedProvider === 'local' && !normalizedApiKey)
       ? null
       : await encryptSecretForSubmission(normalizedApiKey);
   const res = await withNetworkError(
     () =>
       fetch(`${API_BASE}/api/v1/provider-credentials`, {
         method: 'POST',
-        credentials: 'include',
         credentials: 'include', headers: authHeaders(),
         body: JSON.stringify({
+          mode: mode || 'api',
           provider: normalizedProvider || provider,
           label,
           encrypted_secret: encryptedSecret || undefined,
@@ -770,9 +775,9 @@ export const getEmbeddingConfig = async () => {
 };
 
 export const saveEmbeddingConfig = async (payload) => {
-  const { provider, baseUrl, model, apiKey, dimensions, timeoutSeconds, batchSize } = payload;
+  const { mode, provider, baseUrl, model, apiKey, dimensions, timeoutSeconds, batchSize } = payload;
   let encryptedSecret = null;
-  if (apiKey) {
+  if (apiKey && mode !== 'local') {
     encryptedSecret = await encryptSecretForSubmission(apiKey);
   }
       
@@ -780,9 +785,9 @@ export const saveEmbeddingConfig = async (payload) => {
     () =>
       fetch(`${API_BASE}/api/v1/embedding/config`, {
         method: 'PUT',
-        credentials: 'include',
         credentials: 'include', headers: authHeaders(),
         body: JSON.stringify({
+          mode: mode || 'api',
           provider,
           base_url: baseUrl,
           model,
@@ -799,9 +804,9 @@ export const saveEmbeddingConfig = async (payload) => {
 };
 
 export const testEmbeddingConfig = async (payload) => {
-  const { provider, baseUrl, model, apiKey, dimensions } = payload;
+  const { mode, provider, baseUrl, model, apiKey, dimensions } = payload;
   let encryptedSecret = null;
-  if (apiKey) {
+  if (apiKey && mode !== 'local') {
     encryptedSecret = await encryptSecretForSubmission(apiKey);
   }
 
@@ -809,9 +814,9 @@ export const testEmbeddingConfig = async (payload) => {
     () =>
       fetch(`${API_BASE}/api/v1/embedding/test`, {
         method: 'POST',
-        credentials: 'include',
         credentials: 'include', headers: authHeaders(),
         body: JSON.stringify({
+          mode: mode || 'api',
           provider,
           base_url: baseUrl,
           model,

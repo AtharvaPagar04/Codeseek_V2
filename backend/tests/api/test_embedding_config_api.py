@@ -31,7 +31,7 @@ def test_get_embedding_config_default(auth_client):
     data = response.json()
     assert data["provider"] in {"local", "openai_compatible"}
     assert "api_key" not in data
-    assert "api_key_configured" in data
+    assert "has_secret" in data
 
 
 def test_put_embedding_config_local(auth_client):
@@ -49,6 +49,120 @@ def test_put_embedding_config_local(auth_client):
     saved = get_embedding_config(user["id"])
     assert saved["provider"] == "local"
 
+def test_put_embedding_config_local_with_model(auth_client, monkeypatch):
+    import retrieval.api_service as api_service
+    monkeypatch.setattr(api_service, "CODESEEK_ALLOW_LOCAL_PROVIDER", True)
+    client, user = auth_client
+    payload = {
+        "mode": "local",
+        "provider": "local",
+        "base_url": "http://localhost:11434",
+        "model": "nomic-embed-text:latest",
+        "dimensions": 768
+    }
+    response = client.put("/api/v1/embedding/config", json=payload)
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    assert data["provider"] == "local"
+    assert data["model"] == "nomic-embed-text:latest"
+    assert data["dimensions"] == 768
+
+    saved = get_embedding_config(user["id"])
+    assert saved["model"] == "nomic-embed-text:latest"
+    assert saved["dimensions"] == 768
+
+def test_test_endpoint_local_ollama_model(auth_client, monkeypatch):
+    import retrieval.api_service as api_service
+    monkeypatch.setattr(api_service, "CODESEEK_ALLOW_LOCAL_PROVIDER", True)
+    client, user = auth_client
+
+    class MockResponse:
+        def raise_for_status(self): pass
+        def json(self): return {"embedding": [0.1] * 768}
+
+    class MockClient:
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def post(self, url, json, **kwargs):
+            self.last_url = url
+            self.last_json = json
+            return MockResponse()
+
+    mock_client_instance = MockClient()
+    monkeypatch.setattr("httpx.Client", lambda **kwargs: mock_client_instance)
+
+    payload = {
+        "mode": "local",
+        "provider": "local",
+        "base_url": "http://localhost:11434",
+        "model": "nomic-embed-text:latest",
+        "dimensions": 768
+    }
+    response = client.post("/api/v1/embedding/test", json=payload)
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    assert data["ok"] is True
+    assert data["model"] == "nomic-embed-text:latest"
+    assert data["dimensions"] == 768
+    assert mock_client_instance.last_url == "http://localhost:11434/api/embeddings"
+    assert mock_client_instance.last_json["model"] == "nomic-embed-text:latest"
+    assert mock_client_instance.last_json["prompt"] == "health check"
+
+def test_test_endpoint_local_ollama_dimension_mismatch(auth_client, monkeypatch):
+    import retrieval.api_service as api_service
+    monkeypatch.setattr(api_service, "CODESEEK_ALLOW_LOCAL_PROVIDER", True)
+    client, user = auth_client
+
+    class MockResponse:
+        def raise_for_status(self): pass
+        def json(self): return {"embedding": [0.1] * 768}
+
+    class MockClient:
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def post(self, url, json, **kwargs):
+            return MockResponse()
+
+    monkeypatch.setattr("httpx.Client", lambda **kwargs: MockClient())
+
+    payload = {
+        "mode": "local",
+        "provider": "local",
+        "base_url": "http://localhost:11434",
+        "model": "nomic-embed-text:latest",
+        "dimensions": 384
+    }
+    response = client.post("/api/v1/embedding/test", json=payload)
+    assert response.status_code == 400
+    assert "dimension mismatch" in response.json()["detail"]
+
+def test_test_endpoint_local_sentence_transformers_model(auth_client, monkeypatch):
+    import retrieval.api_service as api_service
+    monkeypatch.setattr(api_service, "CODESEEK_ALLOW_LOCAL_PROVIDER", True)
+    client, user = auth_client
+
+    class MockSentenceTransformerModel:
+        def encode(self, texts, **kwargs):
+            import numpy as np
+            return np.zeros((len(texts), 384))
+
+    monkeypatch.setattr("retrieval.support.embedding_provider._get_local_model", lambda model_name, device: MockSentenceTransformerModel())
+
+    payload = {
+        "mode": "local",
+        "provider": "local",
+        "model": "BAAI/bge-small-en-v1.5",
+        "dimensions": 384
+    }
+    response = client.post("/api/v1/embedding/test", json=payload)
+    assert response.status_code == 200, response.json()
+    data = response.json()
+    assert data["ok"] is True
+    assert data["model"] == "BAAI/bge-small-en-v1.5"
+    assert data["dimensions"] == 384
+
 
 def test_put_embedding_config_openai_compatible(auth_client):
     client, user = auth_client
@@ -64,7 +178,7 @@ def test_put_embedding_config_openai_compatible(auth_client):
     data = response.json()
     assert data["provider"] == "openai_compatible"
     assert data["base_url"] == "https://api.example.com"
-    assert data["api_key_configured"] is True
+    assert data["has_secret"] is True
     assert "api_key" not in data
     
     saved = get_embedding_config(user["id"])
@@ -159,6 +273,31 @@ def test_put_embedding_config_invalid_dimensions(auth_client):
     response = client.put("/api/v1/embedding/config", json=payload)
     assert response.status_code == 400
     assert "Invalid dimensions" in response.json()["detail"]
+
+def test_put_embedding_config_large_model_dimensions(auth_client):
+    client, user = auth_client
+    payload = {
+        "provider": "openai_compatible",
+        "base_url": "https://api.example.com",
+        "model": "openai/text-embedding-3-large",
+        "api_key": "test_secret_key",
+        "dimensions": 0  # 0 means auto, which should be accepted
+    }
+    response = client.put("/api/v1/embedding/config", json=payload)
+    assert response.status_code == 200, response.json()
+    assert response.json()["dimensions"] == 0
+
+    # 3072 is also valid
+    payload["dimensions"] = 3072
+    response = client.put("/api/v1/embedding/config", json=payload)
+    assert response.status_code == 200, response.json()
+    assert response.json()["dimensions"] == 3072
+
+    # 384 is invalid for this model
+    payload["dimensions"] = 384
+    response = client.put("/api/v1/embedding/config", json=payload)
+    assert response.status_code == 400
+    assert "Invalid dimensions 384 for model" in response.json()["detail"]
 
 def test_get_latest_indexing_job_includes_embedding_metadata(auth_client):
     client, user = auth_client
