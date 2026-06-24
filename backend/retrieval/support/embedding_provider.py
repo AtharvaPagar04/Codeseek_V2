@@ -14,8 +14,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LOCAL_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
-DEFAULT_LOCAL_EMBEDDING_DIMENSIONS = 384
+DEFAULT_LOCAL_EMBEDDING_MODEL = os.getenv("CODESEEK_LOCAL_EMBEDDING_MODEL", "nomic-embed-text:latest").strip()
+try:
+    DEFAULT_LOCAL_EMBEDDING_DIMENSIONS = int(os.getenv("CODESEEK_LOCAL_EMBEDDING_DIMENSIONS", "768"))
+except ValueError:
+    DEFAULT_LOCAL_EMBEDDING_DIMENSIONS = 768
 DEFAULT_EMBEDDING_PROVIDER = "local"
 DEFAULT_EMBEDDING_BATCH_SIZE = 16
 DEFAULT_EMBEDDING_TIMEOUT_SECONDS = 60.0
@@ -212,7 +215,7 @@ class EmbeddingProvider(Protocol):
         ...
 
 
-class LocalEmbeddingProvider:
+class SentenceTransformersEmbeddingProvider:
     provider_name = "local"
 
     def __init__(self, config: EmbeddingProviderConfig):
@@ -495,10 +498,84 @@ def get_embedding_provider_config() -> EmbeddingProviderConfig:
     return config
 
 
+def _is_ollama_local_config(config: EmbeddingProviderConfig) -> bool:
+    base_url = (config.base_url or "").lower()
+    return bool(base_url) and (
+        "localhost:11434" in base_url
+        or "127.0.0.1:11434" in base_url
+        or base_url.endswith(":11434")
+        or "ollama" in base_url
+    )
+
+class OllamaEmbeddingProvider:
+    provider_name = "local"
+
+    def __init__(self, config: EmbeddingProviderConfig):
+        self.base_url = config.base_url.rstrip("/")
+        self.model_name = config.model or config.local_model
+        self.dimensions = config.dimensions or 0
+        self.timeout_seconds = config.timeout_seconds
+        self.batch_size = config.batch_size or 1
+
+    def embed_texts(
+        self,
+        texts: list[str],
+        *,
+        batch_size: int | None = None,
+        show_progress_bar: bool = False,
+    ) -> list[list[float]]:
+        # Ollama /api/embed takes a list of strings
+        payload = {
+            "model": self.model_name,
+            "input": texts,
+        }
+        with httpx.Client(timeout=self.timeout_seconds) as client:
+            response = client.post(f"{self.base_url}/api/embed", json=payload)
+            response.raise_for_status()
+            data = response.json()
+
+        vectors = data.get("embeddings")
+        if not vectors or len(vectors) != len(texts):
+            # Fallback to older /api/embeddings endpoint sequentially if /api/embed fails
+            vectors = [self.embed_query(text) for text in texts]
+
+        if self.dimensions and len(vectors) > 0 and len(vectors[0]) != self.dimensions:
+            raise EmbeddingConfigurationError(
+                f"Ollama embedding dimension mismatch: expected {self.dimensions}, got {len(vectors[0])}"
+            )
+
+        if len(vectors) > 0:
+            self.dimensions = len(vectors[0])
+        return vectors
+
+    def embed_query(self, text: str, *, prefix: str = "") -> list[float]:
+        payload = {
+            "model": self.model_name,
+            "prompt": f"{prefix}{text}",
+        }
+        with httpx.Client(timeout=self.timeout_seconds) as client:
+            response = client.post(f"{self.base_url}/api/embeddings", json=payload)
+            response.raise_for_status()
+            data = response.json()
+
+        vector = data.get("embedding")
+        if not vector:
+            raise EmbeddingProviderError("Ollama embedding response missing embedding")
+
+        if self.dimensions and len(vector) != self.dimensions:
+            raise EmbeddingConfigurationError(
+                f"Ollama embedding dimension mismatch: expected {self.dimensions}, got {len(vector)}"
+            )
+
+        self.dimensions = len(vector)
+        return vector
+
 def get_embedding_provider(config: EmbeddingProviderConfig | None = None) -> EmbeddingProvider:
     resolved = config or resolve_embedding_config()
     if resolved.provider == "local":
-        return LocalEmbeddingProvider(resolved)
+        if _is_ollama_local_config(resolved):
+            return OllamaEmbeddingProvider(resolved)
+        return SentenceTransformersEmbeddingProvider(resolved)
     if resolved.provider == "openai_compatible":
         return OpenAICompatibleEmbeddingProvider(resolved)
     raise EmbeddingConfigurationError(f"Unsupported embedding provider '{resolved.provider}'.")

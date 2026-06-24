@@ -2,13 +2,15 @@ import { useState, useEffect, useRef } from 'react';
 import {
   createProviderCredential,
   listProviderCredentials,
-  getEmbeddingConfig,
   saveEmbeddingConfig,
+  getEmbeddingConfig,
   testEmbeddingConfig,
   deleteProviderCredential,
 } from '../utils/api';
+import { OPENAI_COMPATIBLE_EMBEDDING_MODELS, validateEmbeddingDimensions } from '../utils/validation.js';
 
 export default function ApiTokensModal({ onClose }) {
+  const [mode, setMode] = useState('api');
   const [providerUrl, setProviderUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [llmModel, setLlmModel] = useState('');
@@ -41,6 +43,7 @@ export default function ApiTokensModal({ onClose }) {
           }
           if (emb) {
             setActiveEmbConfig(emb);
+            setMode(emb.mode === 'local' ? 'local' : 'api');
             setProviderUrl(emb.base_url || '');
             setEmbModel(emb.model || '');
             setEmbDims(emb.dimensions ? String(emb.dimensions) : '');
@@ -66,13 +69,22 @@ export default function ApiTokensModal({ onClose }) {
     setError(null);
     setSuccessMsg(null);
     let url = providerUrl.trim();
+
+    if (!url) {
+      setError('Provider URL is required.');
+      return false;
+    }
+
     if (!url.startsWith('https://') && !url.startsWith('http://')) {
       setError('Provider URL must start with https:// or http://');
       return false;
     }
-    if (!apiKey.trim() && !activeEmbConfig?.api_key_configured && !activeConfig) {
-      setError('API Key is required.');
-      return false;
+
+    if (mode === 'api') {
+      if (!apiKey.trim() && !activeEmbConfig?.has_secret && !activeConfig) {
+        setError('API Key is required for API Provider mode.');
+        return false;
+      }
     }
     if (!llmModel.trim()) {
       setError('LLM Model is required.');
@@ -82,6 +94,15 @@ export default function ApiTokensModal({ onClose }) {
       setError('Embedding Model is required.');
       return false;
     }
+
+    if (mode === 'api') {
+      const dimError = validateEmbeddingDimensions(mode, embModel, embDims);
+      if (dimError) {
+        setError(dimError);
+        return false;
+      }
+    }
+
     return true;
   };
 
@@ -92,7 +113,8 @@ export default function ApiTokensModal({ onClose }) {
 
     try {
       const payload = {
-        provider: 'openai_compatible',
+        mode,
+        provider: mode === 'local' ? 'local' : 'openai_compatible',
         baseUrl: providerUrl.trim().replace(/\/+$/, ''),
         model: embModel.trim(),
         apiKey: apiKey.trim(),
@@ -117,8 +139,9 @@ export default function ApiTokensModal({ onClose }) {
     try {
       // Save LLM credential
       const created = await createProviderCredential({
-        provider: 'aicredits',
-        label: 'OpenAI-Compatible Provider',
+        mode,
+        provider: mode === 'local' ? 'local' : 'aicredits',
+        label: mode === 'local' ? 'Local Provider' : 'OpenAI-Compatible Provider',
         apiKey: apiKey.trim(),
         model: llmModel.trim(),
         isActive: true,
@@ -127,7 +150,8 @@ export default function ApiTokensModal({ onClose }) {
 
       // Save Embedding config
       const payload = {
-        provider: 'openai_compatible',
+        mode,
+        provider: mode === 'local' ? 'local' : 'openai_compatible',
         baseUrl: url,
         model: embModel.trim(),
         apiKey: apiKey.trim(),
@@ -208,31 +232,74 @@ export default function ApiTokensModal({ onClose }) {
               </div>
             )}
 
+
+            <div className="flex gap-2 p-1 bg-surface-2 rounded-lg mb-4">
+              <button
+                type="button"
+                className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${mode === 'local' ? 'bg-surface-0 shadow-sm text-text-primary' : 'text-text-muted hover:text-text-primary'}`}
+                onClick={() => {
+                  setMode('local');
+                  if (!providerUrl || providerUrl.includes('api.')) setProviderUrl('http://localhost:11434');
+                  if (!llmModel) setLlmModel('qwen2.5-coder:3b');
+
+                  if (!embModel || OPENAI_COMPATIBLE_EMBEDDING_MODELS[embModel.trim()]) {
+                    setEmbModel('nomic-embed-text:latest');
+                  }
+                  if (!embDims || embDims === '0' || OPENAI_COMPATIBLE_EMBEDDING_MODELS[embModel?.trim()]) {
+                    setEmbDims('768');
+                  }
+                }}
+              >
+                Local Dev
+              </button>
+              <button
+                type="button"
+                className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${mode === 'api' ? 'bg-surface-0 shadow-sm text-text-primary' : 'text-text-muted hover:text-text-primary'}`}
+                onClick={() => {
+                  setMode('api');
+                  if (!embModel || embModel === 'nomic-embed-text:latest' || embModel === 'BAAI/bge-small-en-v1.5') {
+                    setEmbModel('openai/text-embedding-3-large');
+                  }
+                  if (String(embDims) === '768' || String(embDims) === '384') {
+                    setEmbDims('0');
+                  }
+                }}
+              >
+                API Provider
+              </button>
+            </div>
+
+            {mode === 'local' && (
+              <p className="text-2xs text-text-muted -mt-2">Uses local Ollama/local provider. Intended for development only.</p>
+            )}
+
             <div className="flex flex-col gap-1">
               <label className="text-2xs font-mono text-text-muted uppercase">Provider API URL</label>
               <input
                 type="text"
                 value={providerUrl}
                 onChange={(e) => setProviderUrl(e.target.value)}
-                placeholder="https://api.aicredits.in/v1"
+                placeholder={mode === 'local' ? 'http://localhost:11434' : 'https://api.openai.com/v1'}
                 className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
                 required
               />
-              <p className="text-[11px] text-text-muted mt-0.5">Must be OpenAI-compatible and include https://</p>
+              {mode === 'api' && <p className="text-[11px] text-text-muted mt-0.5">Must be OpenAI-compatible and include https://</p>}
             </div>
 
-            <div className="flex flex-col gap-1">
-              <label className="text-2xs font-mono text-text-muted uppercase">API Key</label>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={(activeConfig || activeEmbConfig) ? "•••••••• (Saved)" : "Enter API key"}
-                className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
-                required={!(activeConfig || activeEmbConfig)}
-              />
-              <p className="text-[11px] text-text-muted mt-0.5">Used securely for LLM and embedding requests.</p>
-            </div>
+            {mode === 'api' && (
+              <div className="flex flex-col gap-1">
+                <label className="text-2xs font-mono text-text-muted uppercase">API Key</label>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={(activeConfig || activeEmbConfig) ? "•••••••• (Saved)" : "Enter API key"}
+                  className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
+                  required={!(activeConfig || activeEmbConfig)}
+                />
+                <p className="text-[11px] text-text-muted mt-0.5">Used securely for LLM and embedding requests.</p>
+              </div>
+            )}
 
             <div className="flex flex-col gap-1">
               <label className="text-2xs font-mono text-text-muted uppercase">LLM Model</label>
@@ -260,23 +327,63 @@ export default function ApiTokensModal({ onClose }) {
 
             <div className="flex flex-col gap-1">
               <label className="text-2xs font-mono text-text-muted uppercase">Embedding Dimensions</label>
-              <input
-                type="number"
-                value={embDims}
-                onChange={(e) => setEmbDims(e.target.value)}
-                placeholder="Optional (e.g. 1536)"
-                className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
-              />
-              <p className="text-[11px] text-text-muted mt-0.5">Leave empty unless your embedding model requires a fixed dimension.</p>
+              {(() => {
+                const modelName = embModel.trim();
+                let isKnownApi = false;
+                let allowed = [];
+                if (mode === 'api' && OPENAI_COMPATIBLE_EMBEDDING_MODELS[modelName]) {
+                  isKnownApi = true;
+                  allowed = OPENAI_COMPATIBLE_EMBEDDING_MODELS[modelName];
+                }
+
+                if (isKnownApi) {
+                  return (
+                    <select
+                      value={embDims || '0'}
+                      onChange={(e) => setEmbDims(e.target.value)}
+                      className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-primary font-mono focus:outline-none focus:border-text-muted"
+                    >
+                      <option value="0">Auto (Recommended)</option>
+                      {allowed.map(d => (
+                        <option key={d} value={String(d)}>{d}</option>
+                      ))}
+                      {/* Hidden option in case the state has an invalid value so it doesn't default to the first option silently */}
+                      {embDims && embDims !== '0' && !allowed.includes(parseInt(embDims, 10)) && (
+                        <option value={embDims} className="hidden">{embDims} (Invalid)</option>
+                      )}
+                    </select>
+                  );
+                } else {
+                  return (
+                    <input
+                      type="number"
+                      value={embDims}
+                      onChange={(e) => setEmbDims(e.target.value)}
+                      placeholder={mode === 'local' ? "e.g. 768" : "Optional (e.g. 1536)"}
+                      className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
+                    />
+                  );
+                }
+              })()}
+              <p className="text-[11px] text-text-muted mt-0.5">Leave empty or Auto unless your embedding model requires a fixed dimension.</p>
+              {mode === 'local' && (
+                <p className="text-[11px] text-text-muted mt-1.5 p-2 bg-surface-1 rounded border border-border/50">
+                  <span className="font-semibold text-text-primary">Ollama local:</span> nomic-embed-text:latest / 768<br/>
+                  <span className="font-semibold text-text-primary">SentenceTransformers:</span> BAAI/bge-small-en-v1.5 / 384
+                </p>
+              )}
+              <p className="text-[11px] text-warning mt-1.5 flex gap-1 items-start bg-warning/10 p-2 rounded-md border border-warning/20">
+                <span className="shrink-0 text-sm leading-none">⚠</span>
+                <span>Changing embedding model or dimensions requires reindexing existing repositories.</span>
+              </p>
             </div>
           </form>
         </div>
 
         {/* Error/Success notification banner */}
         {(error || successMsg) && (
-          <div className={`border-t border-b px-4 py-3 flex items-start gap-3 animate-fadeIn ${
-            error ? 'bg-offline/10 border-offline/20' : 'bg-online/10 border-online/20'
-          }`}>
+          <div className={`border-t border-b px-4 py-3 flex items-start gap-3 animate-fadeIn ${error ? 'bg-offline/10 border-offline/20' : 'bg-online/10 border-online/20'
+            }`}>
             <p className={`text-xs font-mono leading-relaxed flex-1 ${error ? 'text-offline/90' : 'text-online/90'}`}>
               {error ? `⚠ ${error}` : `✓ ${successMsg}`}
             </p>

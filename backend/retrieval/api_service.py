@@ -137,6 +137,16 @@ REQUIRE_EXPLICIT_APP_ENCRYPTION_KEY = os.getenv(
 GITHUB_OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_API_USER_URL = "https://api.github.com/user"
 CODESEEK_FRONTEND_URL = os.getenv("CODESEEK_FRONTEND_URL", "http://localhost:5173")
+
+CODESEEK_PROVIDER_MODE = os.getenv("CODESEEK_PROVIDER_MODE", "api").strip().lower()
+CODESEEK_ALLOW_LOCAL_PROVIDER = os.getenv("CODESEEK_ALLOW_LOCAL_PROVIDER", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+CODESEEK_LOCAL_LLM_BASE_URL = os.getenv("CODESEEK_LOCAL_LLM_BASE_URL", "http://localhost:11434").strip()
+CODESEEK_LOCAL_EMBEDDING_BASE_URL = os.getenv("CODESEEK_LOCAL_EMBEDDING_BASE_URL", "http://localhost:11434").strip()
 OAUTH_STATE_COOKIE = "codeseek_oauth_state"
 ENABLE_DEBUG_DIAGNOSTICS = os.getenv("CODESEEK_ENABLE_DEBUG_DIAGNOSTICS", "1").strip().lower() in {
     "1",
@@ -292,6 +302,7 @@ class QueryRequest(BaseModel):
 
 
 class ProviderCredentialCreateRequest(BaseModel):
+    mode: str = "api"
     provider: str
     api_key: str | None = None
     encrypted_secret: dict | None = None
@@ -301,6 +312,7 @@ class ProviderCredentialCreateRequest(BaseModel):
 
 
 class EmbeddingConfigUpdateRequest(BaseModel):
+    mode: str = "api"
     provider: str
     base_url: str | None = None
     model: str | None = None
@@ -312,6 +324,7 @@ class EmbeddingConfigUpdateRequest(BaseModel):
 
 
 class EmbeddingTestRequest(BaseModel):
+    mode: str = "api"
     provider: str
     base_url: str | None = None
     model: str | None = None
@@ -343,6 +356,15 @@ class SubmissionPublicKeyResponse(BaseModel):
     algorithm: str
     public_key_pem: str
 
+
+
+def _validate_provider_mode(mode: str, base_url: str | None = None) -> None:
+    if mode == "local" and not CODESEEK_ALLOW_LOCAL_PROVIDER:
+        raise HTTPException(status_code=403, detail="Local provider mode is disabled on this server.")
+    if mode == "api" and not CODESEEK_ALLOW_LOCAL_PROVIDER and base_url:
+        lower_url = base_url.lower()
+        if "localhost" in lower_url or "127.0.0.1" in lower_url or "0.0.0.0" in lower_url:
+            raise HTTPException(status_code=403, detail="Local URLs are disabled for API provider mode.")
 
 def _ready_sessions() -> list[dict]:
     return [session for session in list_sessions() if session.get("status") == "ready"]
@@ -1279,25 +1301,27 @@ def get_embedding_config_v1(
     saved = get_embedding_config(user["id"])
     if saved:
         return {
+            "mode": "local" if saved["provider"] in {"ollama", "local"} else "api",
             "provider": saved["provider"],
             "base_url": saved.get("base_url", ""),
             "model": saved.get("model", ""),
             "dimensions": saved.get("dimensions", 0),
             "timeout_seconds": saved.get("timeout_seconds", 60),
             "batch_size": saved.get("batch_size", 64),
-            "api_key_configured": bool(saved.get("api_key", "")),
+            "has_secret": bool(saved.get("api_key", "")),
             "source": "stored",
         }
 
     env_config = get_embedding_provider_config()
     return {
+        "mode": "local" if env_config.provider in {"ollama", "local"} else "api",
         "provider": env_config.provider,
         "base_url": env_config.normalized_base_url,
         "model": env_config.effective_model,
         "dimensions": env_config.dimensions,
         "timeout_seconds": env_config.timeout_seconds,
         "batch_size": env_config.batch_size,
-        "api_key_configured": bool(env_config.api_key),
+        "has_secret": bool(env_config.api_key),
         "source": "env",
     }
 
@@ -1331,13 +1355,18 @@ def update_embedding_config_v1(
     user = _require_auth_user(session_token, authorization)
     from retrieval.stores.embedding_store import upsert_embedding_config, get_embedding_config
 
+    mode = body.mode.strip().lower()
+    _validate_provider_mode(mode, body.base_url)
+
     provider = body.provider.strip().lower()
-    if provider not in {"local", "openai_compatible"}:
+    if mode == "local":
+        provider = "local"
+    elif provider not in {"local", "openai_compatible"}:
         raise HTTPException(status_code=400, detail="Unsupported provider")
 
-    api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
+    api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret) if mode != "local" else ""
 
-    if provider == "openai_compatible":
+    if mode == "api" and provider == "openai_compatible":
         if not body.base_url:
             raise HTTPException(status_code=400, detail="base_url is required for openai_compatible")
 
@@ -1356,16 +1385,25 @@ def update_embedding_config_v1(
                 else:
                     raise HTTPException(status_code=400, detail="api_key is required")
 
-    record = upsert_embedding_config(
-        user["id"],
-        provider=provider,
-        base_url=(body.base_url or "").strip(),
-        model=(body.model or "").strip(),
-        api_key=api_key,
-        dimensions=body.dimensions or 0,
-        timeout_seconds=body.timeout_seconds or 60.0,
-        batch_size=body.batch_size or 64,
-    )
+    from retrieval.stores.auth_store import ensure_api_user
+    ensure_api_user(user)
+
+    try:
+        record = upsert_embedding_config(
+            user["id"],
+            provider=provider,
+            base_url=(body.base_url or "").strip(),
+            model=(body.model or "").strip(),
+            api_key=api_key,
+            dimensions=body.dimensions or 0,
+            timeout_seconds=body.timeout_seconds or 60.0,
+            batch_size=body.batch_size or 64,
+        )
+    except Exception as e:
+        import sqlite3
+        if isinstance(e, sqlite3.IntegrityError):
+            raise HTTPException(status_code=409, detail="Failed to save embedding config due to data integrity constraints.")
+        raise
 
     log_event(
         "api.embedding_config.updated",
@@ -1375,13 +1413,14 @@ def update_embedding_config_v1(
     )
 
     return {
+        "mode": mode,
         "provider": record["provider"],
         "base_url": record.get("base_url", ""),
         "model": record.get("model", ""),
         "dimensions": record.get("dimensions", 0),
         "timeout_seconds": record.get("timeout_seconds", 60),
         "batch_size": record.get("batch_size", 64),
-        "api_key_configured": bool(record.get("api_key", "")),
+        "has_secret": bool(record.get("api_key", "")),
         "source": "stored",
     }
 
@@ -1396,12 +1435,17 @@ def test_embedding_config_v1(
     from retrieval.support.embedding_provider import EmbeddingProviderConfig, get_embedding_provider
     from retrieval.stores.embedding_store import get_embedding_config
 
+    mode = body.mode.strip().lower()
+    _validate_provider_mode(mode, body.base_url)
+
     provider = body.provider.strip().lower()
-    if provider not in {"local", "openai_compatible"}:
+    if mode == "local":
+        provider = "local"
+    elif provider not in {"local", "openai_compatible"}:
         raise HTTPException(status_code=400, detail="Unsupported provider")
 
-    api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
-    if provider == "openai_compatible":
+    api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret) if mode != "local" else ""
+    if mode == "api" and provider == "openai_compatible":
         if not body.base_url:
             raise HTTPException(status_code=400, detail="base_url is required for openai_compatible")
 
@@ -1419,15 +1463,18 @@ def test_embedding_config_v1(
                 else:
                     raise HTTPException(status_code=400, detail="api_key is required for test")
 
+    requested_model = (body.model or "").strip()
+    requested_dimensions = body.dimensions or 0
+
     config = EmbeddingProviderConfig(
         provider=provider,
         base_url=(body.base_url or "").strip(),
         api_key=api_key,
-        model=(body.model or "").strip(),
+        model=requested_model,
         batch_size=1,
         timeout_seconds=15.0,
-        dimensions=body.dimensions or 0,
-        local_model="BAAI/bge-small-en-v1.5",
+        dimensions=requested_dimensions,
+        local_model=requested_model if mode == "local" else None,
         local_device="cpu"
     )
 
@@ -1460,17 +1507,29 @@ def create_provider_credential_v1(
     authorization: str | None = Header(default=None),
 ) -> dict:
     user = _require_auth_user(session_token, authorization)
+    mode = body.mode.strip().lower()
     provider = body.provider.strip().lower()
-    api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
+    if mode == "local":
+        provider = "local"
+
+    api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret) if mode != "local" else ""
     model = (body.model or "").strip()
     label = (body.label or "").strip()
+
     if provider not in SUPPORTED_PROVIDER_TYPES:
         raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
-    if not provider or not label or (provider != "local" and not api_key):
-        raise HTTPException(status_code=400, detail="provider, label, and api_key are required")
+    if not provider or not label:
+        raise HTTPException(status_code=400, detail="provider and label are required")
+    if mode == "api" and provider != "local" and not api_key:
+        raise HTTPException(status_code=400, detail="api_key is required for API provider")
+
+    from retrieval.stores.auth_store import ensure_api_user
+    ensure_api_user(user)
+
     existing = list_provider_credentials(user["id"])
     should_be_active = body.is_active if body.is_active is not None else not existing
-    record = create_provider_credential(
+    try:
+        record = create_provider_credential(
         user["id"],
         provider,
         label,
@@ -1478,6 +1537,14 @@ def create_provider_credential_v1(
         model=model,
         set_active=should_be_active,
     )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import sqlite3
+        if isinstance(e, sqlite3.IntegrityError):
+            raise HTTPException(status_code=409, detail="Failed to save provider credential due to data integrity constraints.")
+        raise
+
     if provider == "local" and should_be_active:
         background_prime_primary_model()
     log_event(

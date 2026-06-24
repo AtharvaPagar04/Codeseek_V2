@@ -40,7 +40,7 @@ test('fetchLatestEvaluationReport invokes the correct endpoint', async () => {
   const originalFetch = globalThis.fetch;
   let calledUrl = null;
   let calledOptions = null;
-  
+
   globalThis.localStorage = {
     getItem: () => null,
     setItem: () => null,
@@ -73,7 +73,7 @@ test('fetchLatestGlobalEvaluationReport invokes the correct endpoint', async () 
   const originalFetch = globalThis.fetch;
   let calledUrl = null;
   let calledOptions = null;
-  
+
   globalThis.localStorage = {
     getItem: () => null,
     setItem: () => null,
@@ -454,8 +454,8 @@ test('fetchIndexingJobHistory calls correct endpoint and returns jobs list', asy
 
   globalThis.localStorage = {
     getItem: () => null,
-    setItem: () => {},
-    removeItem: () => {},
+    setItem: () => { },
+    removeItem: () => { },
   };
 
   globalThis.fetch = async (url, options) => {
@@ -510,8 +510,8 @@ test('fetchIndexingJobHistory supports custom limit param', async () => {
 
   globalThis.localStorage = {
     getItem: () => null,
-    setItem: () => {},
-    removeItem: () => {},
+    setItem: () => { },
+    removeItem: () => { },
   };
 
   globalThis.fetch = async (url, options) => {
@@ -541,8 +541,8 @@ test('deleteSessionApi calls correct endpoint with DELETE method and returns str
 
   globalThis.localStorage = {
     getItem: () => null,
-    setItem: () => {},
-    removeItem: () => {},
+    setItem: () => { },
+    removeItem: () => { },
   };
 
   globalThis.fetch = async (url, options) => {
@@ -581,8 +581,8 @@ test('deleteSessionApi returns warnings when qdrant cleanup fails', async () => 
 
   globalThis.localStorage = {
     getItem: () => null,
-    setItem: () => {},
-    removeItem: () => {},
+    setItem: () => { },
+    removeItem: () => { },
   };
 
   globalThis.fetch = async () => ({
@@ -614,8 +614,8 @@ test('deleteSessionApi propagates 409 active-indexing error', async () => {
 
   globalThis.localStorage = {
     getItem: () => null,
-    setItem: () => {},
-    removeItem: () => {},
+    setItem: () => { },
+    removeItem: () => { },
   };
 
   globalThis.fetch = async () => ({
@@ -715,5 +715,162 @@ test('querySessionStream parses NDJSON chunks and invokes callbacks', async () =
   } finally {
     globalThis.fetch = originalFetch;
     delete globalThis.localStorage;
+  }
+});
+
+test('createProviderCredential skips encryption in local mode', async () => {
+  const originalFetch = globalThis.fetch;
+  let calledOptions = null;
+
+  globalThis.fetch = async (url, options) => {
+    calledOptions = options;
+    return {
+      ok: true,
+      json: async () => ({ provider_credential: { id: 'local-1' } })
+    };
+  };
+
+  globalThis.localStorage = {
+    getItem: () => null,
+    setItem: () => null,
+    removeItem: () => null,
+  };
+
+  try {
+    const { createProviderCredential } = await import('./api.js');
+    await createProviderCredential({
+      mode: 'local',
+      provider: 'ollama',
+      label: 'Local Dev',
+      apiKey: 'should-not-be-encrypted-or-sent',
+      model: 'qwen2.5-coder:3b',
+      isActive: true,
+    });
+    const body = JSON.parse(calledOptions.body);
+    assert.equal(body.mode, 'local');
+    assert.equal(body.provider, 'ollama');
+    assert.equal(body.encrypted_secret, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete globalThis.localStorage;
+  }
+});
+
+test('createProviderCredential encrypts secret in api mode', async () => {
+  const originalFetch = globalThis.fetch;
+  let calledUrl = null;
+  let fetchCount = 0;
+  let finalBody = null;
+
+  globalThis.fetch = async (url, options) => {
+    fetchCount++;
+    // First call is to fetch public key for encryption
+    if (url.includes('/api/v1/crypto/submission-key')) {
+      return {
+        ok: true,
+        json: async () => ({
+          key_id: 'test-key',
+          algorithm: 'RSA-OAEP',
+          public_key_pem: '-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC3zP8iN4ZqD3TqM/8k9nS5vO/W\n-----END PUBLIC KEY-----'
+        })
+      };
+    }
+
+    finalBody = JSON.parse(options.body);
+    return {
+      ok: true,
+      json: async () => ({ provider_credential: { id: 'api-1' } })
+    };
+  };
+
+  globalThis.localStorage = {
+    getItem: () => null,
+    setItem: () => null,
+    removeItem: () => null,
+  };
+
+  const originalCrypto = globalThis.crypto;
+  Object.defineProperty(globalThis, 'crypto', {
+    value: {
+      subtle: {
+        importKey: async () => ({}),
+        encrypt: async () => new Uint8Array([1, 2, 3]).buffer,
+      }
+    },
+    writable: true,
+    configurable: true
+  });
+
+  const originalWindow = globalThis.window;
+  globalThis.window = globalThis;
+
+  try {
+    const { createProviderCredential } = await import('./api.js');
+    await createProviderCredential({
+      mode: 'api',
+      provider: 'aicredits',
+      label: 'API Dev',
+      apiKey: 'secret-api-key',
+      model: 'gpt-4o',
+      isActive: true,
+    });
+    assert.equal(finalBody.mode, 'api');
+    assert.equal(finalBody.provider, 'aicredits');
+    assert.ok(finalBody.encrypted_secret);
+    assert.equal(finalBody.encrypted_secret.key_id, 'test-key');
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.defineProperty(globalThis, 'crypto', {
+      value: originalCrypto,
+      writable: true,
+      configurable: true
+    });
+    delete globalThis.localStorage;
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+}
+);
+
+test('testEmbeddingConfig sends correct local payload without encryption', async (t) => {
+  const originalFetch = globalThis.fetch;
+  let fetchedUrl, fetchedOptions;
+
+  globalThis.fetch = async (url, options) => {
+    fetchedUrl = url;
+    fetchedOptions = options;
+    return {
+      ok: true,
+      json: async () => ({ ok: true, model: 'nomic-embed-text:latest', dimensions: 768 })
+    };
+  };
+
+  try {
+    const { testEmbeddingConfig } = await import('./api.js');
+    const result = await testEmbeddingConfig({
+      mode: 'local',
+      provider: 'local',
+      baseUrl: 'http://localhost:11434',
+      model: 'nomic-embed-text:latest',
+      dimensions: 768,
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.model, 'nomic-embed-text:latest');
+    assert.equal(result.dimensions, 768);
+
+    assert.ok(fetchedUrl.endsWith('/api/v1/embedding/test'));
+    const body = JSON.parse(fetchedOptions.body);
+    assert.equal(body.mode, 'local');
+    assert.equal(body.provider, 'local');
+    assert.equal(body.base_url, 'http://localhost:11434');
+    assert.equal(body.model, 'nomic-embed-text:latest');
+    assert.equal(body.dimensions, 768);
+    assert.equal(body.encrypted_secret, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
