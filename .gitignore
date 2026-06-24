@@ -35,3 +35,23 @@ backend/scratch/
 # Generated evaluation reports
 evals/reports/
 backend/evals/reports/
+
+# env files
+.env
+.env.*
+backend/.env
+backend/.env.*
+frontend/.env
+frontend/.env.*
+
+# virtual environments
+.venv/
+backend/.venv/
+frontend/.venv/
+
+# local data
+data/
+backend/data/
+*.db
+*.sqlite
+*.sqlite3
