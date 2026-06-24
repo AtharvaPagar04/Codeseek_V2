@@ -31,7 +31,7 @@ def test_command_building_and_safe_workflow(temp_output_dir):
 
     def mock_run(cmd, *args, **kwargs):
         captured_cmds.append(cmd)
-        
+
         # Write mock files as side effects of running
         if any("retrieval_eval.py" in arg for arg in cmd):
             ret_path = Path(cmd[cmd.index("--output") + 1])
@@ -53,6 +53,8 @@ def test_command_building_and_safe_workflow(temp_output_dir):
             out_md_path.write_text("# Policy Report MD")
 
         mock_process = MagicMock()
+        mock_process.stdout = ""
+        mock_process.stderr = ""
         mock_process.returncode = 0
         mock_process.stdout = "Mock Success Out"
         mock_process.stderr = ""
@@ -83,11 +85,11 @@ def test_command_building_and_safe_workflow(temp_output_dir):
 
     with open(summary_json, "r") as f:
         data = json.load(f)
-    
+
     # 4. PASS when all subprocesses return 0 and policy summary is PASS
     assert data["status"] == "PASS"
     assert data["hard_gate_status"] == "PASS"
-    
+
 def test_status_warn_handling(temp_output_dir):
     argv = [
         "run_safe_evals.py",
@@ -116,6 +118,8 @@ def test_status_warn_handling(temp_output_dir):
             }))
 
         mock_process = MagicMock()
+        mock_process.stdout = ""
+        mock_process.stderr = ""
         mock_process.returncode = 0
         mock_process.stdout = "Success"
         mock_process.stderr = ""
@@ -141,6 +145,8 @@ def test_required_step_failure(temp_output_dir):
 
     def mock_run(cmd, *args, **kwargs):
         mock_process = MagicMock()
+        mock_process.stdout = ""
+        mock_process.stderr = ""
         if any("retrieval_eval.py" in arg for arg in cmd):
             mock_process.returncode = 1
             mock_process.stdout = ""
@@ -191,6 +197,8 @@ def test_policy_summary_status_error(temp_output_dir):
             }))
 
         mock_process = MagicMock()
+        mock_process.stdout = ""
+        mock_process.stderr = ""
         mock_process.returncode = 0
         mock_process.stdout = "Success"
         mock_process.stderr = ""
@@ -218,8 +226,10 @@ def test_timeout_marks_step_error(temp_output_dir):
     def mock_run(cmd, *args, **kwargs):
         if any("retrieval_eval.py" in arg for arg in cmd):
             raise subprocess.TimeoutExpired(cmd=cmd, timeout=1800, output="Partial std", stderr="Timeout expired")
-        
+
         mock_process = MagicMock()
+        mock_process.stdout = ""
+        mock_process.stderr = ""
         mock_process.returncode = 0
         mock_process.stdout = "Success"
         mock_process.stderr = ""
@@ -265,6 +275,8 @@ def test_missing_optional_reports_do_not_fail_runner(temp_output_dir):
             }))
 
         mock_process = MagicMock()
+        mock_process.stdout = ""
+        mock_process.stderr = ""
         mock_process.returncode = 0
         mock_process.stdout = "Success"
         mock_process.stderr = ""
@@ -283,7 +295,7 @@ def test_stale_reports_removed_on_failure(temp_output_dir):
     # Write stale report files
     stale_retrieval = temp_output_dir / "retrieval_latest.json"
     stale_retrieval.write_text(json.dumps({"status": "PASS", "message": "stale pass"}))
-    
+
     stale_policy = temp_output_dir / "eval_policy_summary.json"
     stale_policy.write_text(json.dumps({"status": "PASS", "message": "stale pass"}))
 
@@ -297,6 +309,8 @@ def test_stale_reports_removed_on_failure(temp_output_dir):
 
     def mock_run(cmd, *args, **kwargs):
         mock_process = MagicMock()
+        mock_process.stdout = ""
+        mock_process.stderr = ""
         mock_process.returncode = 1  # Fail retrieval_eval immediately
         mock_process.stdout = ""
         mock_process.stderr = "Retrieval failed."
@@ -337,6 +351,8 @@ def test_skipped_policy_summary_error_status(temp_output_dir):
 
     def mock_run(cmd, *args, **kwargs):
         mock_process = MagicMock()
+        mock_process.stdout = ""
+        mock_process.stderr = ""
         if any("retrieval_eval.py" in arg for arg in cmd):
             mock_process.returncode = 1
             mock_process.stdout = ""
@@ -353,7 +369,7 @@ def test_skipped_policy_summary_error_status(temp_output_dir):
     summary_json = temp_output_dir / "safe_eval_summary.json"
     with open(summary_json, "r") as f:
         data = json.load(f)
-    
+
     assert data["status"] == "ERROR"
     assert data["hard_gate_status"] == "ERROR"
     assert data["recommendation"] == "Upstream eval failed. Inspect step logs."
@@ -371,6 +387,8 @@ def test_missing_session_failure_placeholder(temp_output_dir):
 
     def mock_run(cmd, *args, **kwargs):
         mock_process = MagicMock()
+        mock_process.stdout = ""
+        mock_process.stderr = ""
         mock_process.returncode = 1
         mock_process.stdout = ""
         mock_process.stderr = "Session not found in DB."
@@ -397,3 +415,103 @@ def test_missing_session_failure_placeholder(temp_output_dir):
     assert summary["hard_gate_status"] == "ERROR"
     assert "Step failed: retrieval_eval" in summary["hard_gate_failures"]
     assert "Step failed: conversation_eval" in summary["hard_gate_failures"]
+
+def test_run_safe_evals_parses_policy_summary_when_step_exits_one(temp_output_dir):
+    argv = [
+        "run_safe_evals.py",
+        "--session-id", "test-session-policy-fail",
+        "--expected-repo-root", "/home/arch/DEV/CodeSeek",
+        "--expected-collection", "coll",
+        "--output-dir", str(temp_output_dir)
+    ]
+
+    def mock_run(cmd, *args, **kwargs):
+        mock_process = MagicMock()
+        mock_process.stdout = ""
+        mock_process.stderr = ""
+        if any("retrieval_eval.py" in arg for arg in cmd):
+            ret_path = Path(cmd[cmd.index("--output") + 1])
+            ret_path.write_text(json.dumps({"status": "PASS", "summary": {}}))
+            mock_process.returncode = 0
+            mock_process.stdout = "Success"
+        elif any("conversation_eval.py" in arg for arg in cmd):
+            conv_path = Path(cmd[cmd.index("--output") + 1])
+            conv_path.write_text(json.dumps({"status": "PASS"}))
+            mock_process.returncode = 0
+            mock_process.stdout = "Success"
+        elif any("eval_policy_summary.py" in arg for arg in cmd):
+            out_json_path = Path(cmd[cmd.index("--output-json") + 1])
+            out_json_path.write_text(json.dumps({
+                "status": "ERROR",
+                "hard_gate_status": "ERROR",
+                "hard_gate_failures": ["real gate failure"],
+                "warnings": [],
+                "diagnostics": [],
+                "recommendation": "Real recommendation from policy script."
+            }))
+            mock_process.returncode = 1
+            mock_process.stderr = "Policy script exited with 1"
+        return mock_process
+
+    with patch("sys.argv", argv), patch("subprocess.run", side_effect=mock_run):
+        run_safe_evals_main()
+
+    summary_json = temp_output_dir / "safe_eval_summary.json"
+    assert summary_json.exists()
+
+    with open(summary_json, "r") as f:
+        data = json.load(f)
+
+    assert data["status"] == "ERROR"
+    assert data["hard_gate_status"] == "ERROR"
+    assert "real gate failure" in data["hard_gate_failures"]
+    assert "Step failed: eval_policy_summary" not in data["hard_gate_failures"]
+    assert data["recommendation"] == "Real recommendation from policy script."
+
+    policy_step = next(s for s in data["steps"] if s["name"] == "eval_policy_summary")
+    assert policy_step["return_code"] == 1
+
+
+def test_run_safe_evals_reports_missing_policy_summary_when_json_absent(temp_output_dir):
+    argv = [
+        "run_safe_evals.py",
+        "--session-id", "test-session-policy-missing",
+        "--expected-repo-root", "/home/arch/DEV/CodeSeek",
+        "--expected-collection", "coll",
+        "--output-dir", str(temp_output_dir)
+    ]
+
+    def mock_run(cmd, *args, **kwargs):
+        mock_process = MagicMock()
+        mock_process.stdout = ""
+        mock_process.stderr = ""
+        if any("retrieval_eval.py" in arg for arg in cmd):
+            ret_path = Path(cmd[cmd.index("--output") + 1])
+            ret_path.write_text(json.dumps({"status": "PASS", "summary": {}}))
+            mock_process.returncode = 0
+            mock_process.stdout = "Success"
+        elif any("conversation_eval.py" in arg for arg in cmd):
+            conv_path = Path(cmd[cmd.index("--output") + 1])
+            conv_path.write_text(json.dumps({"status": "PASS"}))
+            mock_process.returncode = 0
+            mock_process.stdout = "Success"
+        elif any("eval_policy_summary.py" in arg for arg in cmd):
+            # Simulate a crash before writing JSON
+            mock_process.returncode = 2
+            mock_process.stderr = "Crash!"
+        return mock_process
+
+    with patch("sys.argv", argv), patch("subprocess.run", side_effect=mock_run):
+        run_safe_evals_main()
+
+    summary_json = temp_output_dir / "safe_eval_summary.json"
+    with open(summary_json, "r") as f:
+        data = json.load(f)
+
+    assert data["status"] == "ERROR"
+    assert data["hard_gate_status"] == "ERROR"
+    assert "Step failed: eval_policy_summary" in data["hard_gate_failures"]
+    assert data["recommendation"] == "Policy summary report missing or failed to run."
+
+    policy_step = next(s for s in data["steps"] if s["name"] == "eval_policy_summary")
+    assert policy_step["return_code"] == 2

@@ -44,6 +44,25 @@ def get_latest_evaluation_report(session_id: str | None = None) -> dict:
             "diagnostics": []
         }
 
+    report_session_id = data.get("session_id")
+    if session_id and report_session_id and session_id != report_session_id:
+        return {
+            "available": False,
+            "reason": "latest_report_belongs_to_different_session",
+            "message": "Latest evaluation report belongs to a different session.",
+            "requested_session_id": session_id,
+            "report_session_id": report_session_id,
+            "report_path": str(report_path)
+        }
+    elif session_id and not report_session_id:
+        return {
+            "available": False,
+            "reason": "latest_report_missing_session_metadata",
+            "message": "Latest evaluation report is missing session metadata and cannot be verified.",
+            "requested_session_id": session_id,
+            "report_path": str(report_path)
+        }
+
     result = {
         "available": True,
         "report_path": str(report_path),
