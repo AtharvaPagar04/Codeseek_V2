@@ -1926,6 +1926,7 @@ def get_session_index_preview(session_id: str, user_id: str) -> dict:
             print(f"Warning: git status --porcelain failed during preview check: {e}")
 
     session_status = session.get("status", "unknown")
+    embedding_status = _embedding_config_status(session)
     
     if session_status == "indexing":
         if is_stale_indexing_session(session):
