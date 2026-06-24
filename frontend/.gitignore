@@ -2,3 +2,5 @@ node_modules/
 dist/
 .env
 *.local
+!.env.example
+!.env.production.example

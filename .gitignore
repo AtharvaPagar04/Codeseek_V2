@@ -56,3 +56,5 @@ backend/data/
 *.sqlite
 *.sqlite3
 frontend/.vite/
+!.env.example
+!.env.production.example
