@@ -6,7 +6,7 @@ import pytest
 
 from retrieval.support.embedding_provider import (
     EmbeddingConfigurationError,
-    LocalEmbeddingProvider,
+    SentenceTransformersEmbeddingProvider,
     build_embedding_config_hash,
     current_embedding_metadata,
     get_embedding_provider,
@@ -28,7 +28,7 @@ def test_default_embedding_provider_is_local(monkeypatch: pytest.MonkeyPatch):
     assert config.provider == "local"
     assert config.local_model == "BAAI/bge-small-en-v1.5"
     assert config.dimensions == 384
-    assert isinstance(get_embedding_provider(config), LocalEmbeddingProvider)
+    assert isinstance(get_embedding_provider(config), SentenceTransformersEmbeddingProvider)
 
 
 @pytest.mark.parametrize(
@@ -47,7 +47,7 @@ def test_cloud_provider_requires_base_url_api_key_and_model(
     monkeypatch.setenv("CODESEEK_EMBEDDING_PROVIDER", "openai_compatible")
     monkeypatch.setenv("CODESEEK_EMBEDDING_BASE_URL", "https://api.example.com/v1")
     monkeypatch.setenv("CODESEEK_EMBEDDING_API_KEY", "secret-key")
-    monkeypatch.setenv("CODESEEK_EMBEDDING_MODEL", "openai/text-embedding-3-small")
+    monkeypatch.setenv("CODESEEK_EMBEDDING_MODEL", "text-embedding-3-small")
     monkeypatch.delenv(missing_key, raising=False)
 
     with pytest.raises(EmbeddingConfigurationError) as exc_info:
@@ -65,7 +65,7 @@ def test_base_url_normalization():
 def test_config_hash_excludes_api_key(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("CODESEEK_EMBEDDING_PROVIDER", "openai_compatible")
     monkeypatch.setenv("CODESEEK_EMBEDDING_BASE_URL", "https://api.example.com/v1/")
-    monkeypatch.setenv("CODESEEK_EMBEDDING_MODEL", "openai/text-embedding-3-small")
+    monkeypatch.setenv("CODESEEK_EMBEDDING_MODEL", "text-embedding-3-small")
     monkeypatch.setenv("CODESEEK_EMBEDDING_DIMENSIONS", "1536")
 
     monkeypatch.setenv("CODESEEK_EMBEDDING_API_KEY", "first-secret")
@@ -81,7 +81,7 @@ def test_config_hash_changes_for_provider_model_and_dimensions():
     base = build_embedding_config_hash(
         provider="openai_compatible",
         base_url="https://api.example.com/v1",
-        model="openai/text-embedding-3-small",
+        model="text-embedding-3-small",
         dimensions=1536,
     )
 
@@ -100,7 +100,7 @@ def test_config_hash_changes_for_provider_model_and_dimensions():
     changed_dimensions = build_embedding_config_hash(
         provider="openai_compatible",
         base_url="https://api.example.com/v1",
-        model="openai/text-embedding-3-small",
+        model="text-embedding-3-small",
         dimensions=3072,
     )
 

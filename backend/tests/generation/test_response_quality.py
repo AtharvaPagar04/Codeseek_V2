@@ -34,7 +34,7 @@ def test_overview_answer_is_detailed_and_not_helper_metadata() -> None:
 
 def test_indexing_explanation_mentions_pipeline_stages_and_backend_sources() -> None:
     sources = [
-        _src("frontend/src/components/EvaluationPanel.jsx", "EvaluationPanel"),
+        _src("frontend/src/components/SessionView.jsx", "SessionView"),
         _src("backend/rag_ingestion/main.py", "run_pipeline"),
         _src("backend/rag_ingestion/stages/discovery.py", "discover_files"),
         _src("backend/rag_ingestion/stages/chunking.py", "chunk_files"),

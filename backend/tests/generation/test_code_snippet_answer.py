@@ -86,17 +86,17 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         self.eval_report_sources = [
             {
                 "relative_path": "backend/retrieval/api_service.py",
-                "symbol_name": "get_latest_evaluation_report_v1",
+                "symbol_name": "get_index_preview_v1",
                 "chunk_type": "function",
-                "content": "@v1.get('/sessions/{session_id}/evaluation/latest')\ndef get_latest_evaluation_report_v1(session_id, session_token=None):\n    auth_user = _require_auth_user(session_token)\n    return get_latest_evaluation_report(session_id)",
+                "content": "@v1.get('/sessions/{session_id}/index-preview')\ndef get_index_preview_v1(session_id, session_token=None):\n    auth_user = _require_auth_user(session_token)\n    return get_index_preview(session_id)",
                 "start_line": 1215,
                 "end_line": 1225,
             },
             {
-                "relative_path": "backend/retrieval/support/eval_reports.py",
-                "symbol_name": "get_latest_evaluation_report",
+                "relative_path": "backend/retrieval/support/session_indexer.py",
+                "symbol_name": "get_index_preview",
                 "chunk_type": "function",
-                "content": "def get_latest_evaluation_report(session_id=None):\n    report_path = backend_root.parent / 'evals' / 'reports' / 'safe_eval_latest' / 'safe_eval_summary.json'\n    return result",
+                "content": "def get_index_preview(session_id=None):\n    report_path = backend_root.parent / 'evals' / 'reports' / 'safe_eval_latest' / 'safe_eval_summary.json'\n    return result",
                 "start_line": 6,
                 "end_line": 15,
             },
@@ -135,7 +135,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "end_line": 2,
             },
             {
-                "relative_path": "backend/tests/test_eval_reports.py",
+                "relative_path": "backend/tests/test_session_indexer.py",
                 "symbol_name": "test_latest_eval_report",
                 "chunk_type": "function",
                 "content": "def test_latest_eval_report():\n    assert True",
@@ -790,16 +790,16 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
              patch("retrieval.main.generate_answer", return_value="Here is the code."):
             ans1, srcs1, _ = run_query("provide me the auth function code", memory)
             ans2, srcs2, _ = run_query("show me the safe eval runner code", memory)
-            ans3, srcs3, _ = run_query("show me the evaluation report API endpoint code", memory)
+            ans3, srcs3, _ = run_query("show me the index preview API endpoint code", memory)
             ans4, srcs4, _ = run_query("show me the Qdrant upsert code", memory)
             ans5, srcs5, _ = run_query("show me the safe eval runner code", memory)
         self.assertTrue(any("auth_store.py" in src.get("relative_path", "") for src in srcs1))
         self.assertTrue(all("backend/evals/run_safe_evals.py" == src.get("relative_path", "") for src in srcs2))
-        self.assertTrue(any("eval_reports.py" in src.get("relative_path", "") for src in srcs3))
+        self.assertTrue(any("session_indexer.py" in src.get("relative_path", "") for src in srcs3))
         self.assertTrue(any("storage.py" in src.get("relative_path", "") for src in srcs4))
         self.assertTrue(all("backend/evals/run_safe_evals.py" == src.get("relative_path", "") for src in srcs5))
         self.assertIn("def main", ans2)
-        self.assertIn("get_latest_evaluation_report_v1", ans3)
+        self.assertIn("get_index_preview_v1", ans3)
         self.assertIn("store_chunks", ans4)
         self.assertIn("def main", ans5)
         self.assertNotIn("I could not find strong evidence", ans2)
@@ -943,10 +943,10 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
              patch("retrieval.main.select_sources_for_display", return_value=polluted), \
              patch("retrieval.main.score_evidence_confidence", return_value={"level": "strong", "count": 3}), \
              patch("retrieval.main.generate_answer", return_value="Here is the code."):
-            ans, final_srcs, _ = run_query("show me the evaluation report API endpoint code", memory)
+            ans, final_srcs, _ = run_query("show me the index preview API endpoint code", memory)
         paths = [src.get("relative_path", "") for src in final_srcs]
         self.assertEqual(
-            {"backend/retrieval/api_service.py", "backend/retrieval/support/eval_reports.py"},
+            {"backend/retrieval/api_service.py", "backend/retrieval/support/session_indexer.py"},
             set(paths),
         )
         self.assertEqual(len(final_srcs), len({(
@@ -957,17 +957,17 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         ) for src in final_srcs}))
         self.assertNotIn("backend/retrieval/search/searcher.py", paths)
         self.assertNotIn("backend/rag_ingestion/stages/storage.py", paths)
-        self.assertNotIn("backend/tests/test_eval_reports.py", paths)
-        self.assertIn("get_latest_evaluation_report_v1", ans)
-        self.assertIn("get_latest_evaluation_report", ans)
-        self.assertIn("evaluation/latest", ans)
+        self.assertNotIn("backend/tests/test_session_indexer.py", paths)
+        self.assertIn("get_index_preview_v1", ans)
+        self.assertIn("get_index_preview", ans)
+        self.assertIn("index-preview", ans)
         self.assertNotIn("retry_session_v1", ans)
         self.assertNotIn("index_latest_session_v1", ans)
         self.assertNotIn("_rerank_with_query_tokens", ans)
         self.assertIn("backend/retrieval/api_service.py", ans)
-        self.assertIn("backend/retrieval/support/eval_reports.py", ans)
+        self.assertIn("backend/retrieval/support/session_indexer.py", ans)
         self.assertEqual(
-            {"get_latest_evaluation_report_v1", "get_latest_evaluation_report"},
+            {"get_index_preview_v1", "get_index_preview"},
             {src.get("symbol_name", "") for src in final_srcs},
         )
 
@@ -975,13 +975,13 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
     def test_evaluation_report_api_endpoint_does_not_render_unrelated_api_handlers(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         answer = build_code_snippet_answer(
-            raw_query="show me the evaluation report API endpoint code",
+            raw_query="show me the index preview API endpoint code",
             sources=self.eval_report_sources,
             chunks=self.eval_report_sources,
         )
-        self.assertIn("get_latest_evaluation_report_v1", answer)
-        self.assertIn("get_latest_evaluation_report", answer)
-        self.assertIn("evaluation/latest", answer)
+        self.assertIn("get_index_preview_v1", answer)
+        self.assertIn("get_index_preview", answer)
+        self.assertIn("index-preview", answer)
         self.assertNotIn("retry_session_v1", answer)
         self.assertNotIn("index_latest_session_v1", answer)
 
@@ -1011,16 +1011,16 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
              patch("retrieval.main.generate_answer", return_value="Here is the code."):
             ans1, srcs1, _ = run_query("provide me the auth function code", memory)
             ans2, srcs2, _ = run_query("show me the safe eval runner code", memory)
-            ans3, srcs3, _ = run_query("show me the evaluation report API endpoint code", memory)
+            ans3, srcs3, _ = run_query("show me the index preview API endpoint code", memory)
         self.assertTrue(any("auth_store.py" in src.get("relative_path", "") for src in srcs1))
         self.assertFalse(any("run_safe_evals.py" in src.get("relative_path", "") for src in srcs1))
         self.assertTrue(all("backend/evals/run_safe_evals.py" == src.get("relative_path", "") for src in srcs2))
         self.assertFalse(any("auth_store.py" in src.get("relative_path", "") for src in srcs2))
-        self.assertTrue(any("eval_reports.py" in src.get("relative_path", "") for src in srcs3))
+        self.assertTrue(any("session_indexer.py" in src.get("relative_path", "") for src in srcs3))
         self.assertFalse(any("run_safe_evals.py" in src.get("relative_path", "") for src in srcs3))
         self.assertIn("_current_auth_user", ans1)
         self.assertIn("def main", ans2)
-        self.assertIn("get_latest_evaluation_report_v1", ans3)
+        self.assertIn("get_index_preview_v1", ans3)
         self.assertNotIn("# ... omitted for brevity ...", ans1)
 
     def test_safe_eval_source_location_prefers_implementation(self) -> None:
@@ -1060,16 +1060,16 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
     def test_explicit_tests_request_still_allows_tests(self, mock_read) -> None:
         mock_read.side_effect = lambda src: src.get("content", "")
         answer = build_code_snippet_answer(
-            raw_query="show me tests for evaluation report API endpoint",
+            raw_query="show me tests for index preview API endpoint",
             sources=self.eval_report_sources + [self.unwanted_sources[2]],
             chunks=self.eval_report_sources + [self.unwanted_sources[2]],
         )
-        self.assertIn("backend/tests/test_eval_reports.py", answer)
+        self.assertIn("backend/tests/test_session_indexer.py", answer)
 
     def test_explicit_docs_request_still_allows_safe_eval_docs(self) -> None:
         from retrieval.search.searcher import query_explicitly_requests_non_implementation_artifacts
         self.assertTrue(query_explicitly_requests_non_implementation_artifacts("what does safe_eval_runner.md document?"))
-        self.assertFalse(query_explicitly_requests_non_implementation_artifacts("show me the evaluation report API endpoint code"))
+        self.assertFalse(query_explicitly_requests_non_implementation_artifacts("show me the index preview API endpoint code"))
 
     @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_no_duplicate_source_footer(self, mock_read):

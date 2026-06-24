@@ -312,21 +312,21 @@ class SourceLocationQueriesTests(unittest.TestCase):
         }
         report_api_source = {
             "relative_path": "backend/retrieval/api_service.py",
-            "symbol_name": "get_latest_evaluation_report_v1",
+            "symbol_name": "get_index_preview_v1",
             "start_line": 1,
             "end_line": 40,
             "expansion_type": "primary",
             "labels": ["question_use:code-location"],
-            "content": "def get_latest_evaluation_report_v1():\n    pass",
+            "content": "def get_index_preview_v1():\n    pass",
         }
         report_loader_source = {
-            "relative_path": "backend/retrieval/support/eval_reports.py",
-            "symbol_name": "get_latest_evaluation_report",
+            "relative_path": "backend/retrieval/support/session_indexer.py",
+            "symbol_name": "get_index_preview",
             "start_line": 1,
             "end_line": 40,
             "expansion_type": "primary",
             "labels": ["question_use:code-location"],
-            "content": "def get_latest_evaluation_report():\n    pass",
+            "content": "def get_index_preview():\n    pass",
         }
 
         captured: dict[str, str] = {}
@@ -375,12 +375,12 @@ class SourceLocationQueriesTests(unittest.TestCase):
             primary_intent="FILE",
         )
         memory.add(
-            query="Where is evaluation report API implemented?",
+            query="Where is index preview API implemented?",
             answer="The implementation is in backend/retrieval/api_service.py.",
             resolved_query="backend/retrieval/api_service.py",
             entities={
                 "files": ["backend/retrieval/api_service.py"],
-                "symbols": ["get_latest_evaluation_report_v1"],
+                "symbols": ["get_index_preview_v1"],
                 "routes": [],
                 "env_keys": [],
                 "services": [],
@@ -388,7 +388,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             rendered_sources=[
                 {
                     "relative_path": "backend/retrieval/api_service.py",
-                    "symbol_name": "get_latest_evaluation_report_v1",
+                    "symbol_name": "get_index_preview_v1",
                     "start_line": 1,
                     "end_line": 40,
                     "expansion_type": "primary",
@@ -438,17 +438,17 @@ class SourceLocationQueriesTests(unittest.TestCase):
             ), patch(
                 "retrieval.main.generate_answer", side_effect=record_generate_answer
             ) as generate_answer:
-                report_answer, report_sources, _ = run_query("Where is evaluation report API implemented?", memory)
+                report_answer, report_sources, _ = run_query("Where is index preview API implemented?", memory)
                 answer, sources, _ = run_query("show me safe eval docs", memory)
 
         self.assertEqual("", captured.get("assemble_history"))
         self.assertIn("The implementation is in:", report_answer)
         self.assertIn("backend/retrieval/api_service.py", report_answer)
-        self.assertIn("backend/retrieval/support/eval_reports.py", report_answer)
+        self.assertIn("backend/retrieval/support/session_indexer.py", report_answer)
         self.assertNotIn("docs describe", report_answer.lower())
         self.assertNotIn("Key points from the docs", report_answer)
         self.assertEqual("backend/retrieval/api_service.py", report_sources[0]["relative_path"])
-        self.assertEqual("backend/retrieval/support/eval_reports.py", report_sources[1]["relative_path"])
+        self.assertEqual("backend/retrieval/support/session_indexer.py", report_sources[1]["relative_path"])
         self.assertEqual("backend/docs/retrieval_docs/safe_eval_runner.md", sources[0]["relative_path"])
         self.assertIn("safe eval docs", answer.lower())
         self.assertIn("The safe eval docs describe the Safe Eval Runner.", answer)
@@ -457,7 +457,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
         self.assertNotIn("symbol/function", answer)
         self.assertNotIn("implemented in", answer)
         self.assertNotIn("Where is safe eval implemented?", answer)
-        self.assertNotIn("Where is evaluation report API implemented?", answer)
+        self.assertNotIn("Where is index preview API implemented?", answer)
         self.assertNotIn("Based on the conversation history", answer)
         generate_answer.assert_not_called()
 
@@ -482,11 +482,11 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 "backend/evals/run_safe_evals.py",
             ),
             (
-                "Where is evaluation report API implemented?",
+                "Where is index preview API implemented?",
                 [
                     src("backend/docs/retrieval_docs/eval_report_api.md", "eval_report_api_md"),
-                    src("backend/retrieval/api_service.py", "get_latest_evaluation_report_v1"),
-                    src("backend/retrieval/support/eval_reports.py", "get_latest_evaluation_report"),
+                    src("backend/retrieval/api_service.py", "get_index_preview_v1"),
+                    src("backend/retrieval/support/session_indexer.py", "get_index_preview"),
                 ],
                 "backend/retrieval/api_service.py",
             ),
@@ -535,7 +535,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             },
             {
                 "relative_path": "backend/retrieval/api_service.py",
-                "symbol_name": "get_latest_evaluation_report_v1",
+                "symbol_name": "get_index_preview_v1",
                 "start_line": 620,
                 "end_line": 680,
                 "expansion_type": "primary",
@@ -543,8 +543,8 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 "retrieval_score": 0.90,
             },
             {
-                "relative_path": "backend/retrieval/support/eval_reports.py",
-                "symbol_name": "get_latest_evaluation_report",
+                "relative_path": "backend/retrieval/support/session_indexer.py",
+                "symbol_name": "get_index_preview",
                 "start_line": 1,
                 "end_line": 80,
                 "expansion_type": "primary",
@@ -568,7 +568,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             ), patch(
                 "retrieval.main.process_query",
                 return_value={
-                    "raw_query": "Where is evaluation report API implemented?",
+                    "raw_query": "Where is index preview API implemented?",
                     "intent": "FILE",
                     "primary_intent": "FILE",
                     "entities": {},
@@ -582,13 +582,13 @@ class SourceLocationQueriesTests(unittest.TestCase):
             ), patch(
                 "retrieval.main.generate_answer"
             ) as generate_answer:
-                answer, sources, token_count = run_query("Where is evaluation report API implemented?", memory)
+                answer, sources, token_count = run_query("Where is index preview API implemented?", memory)
 
         self.assertIn("backend/retrieval/api_service.py", answer)
-        self.assertIn("backend/retrieval/support/eval_reports.py", answer)
+        self.assertIn("backend/retrieval/support/session_indexer.py", answer)
         self.assertNotIn("backend/scripts/retrieval_eval.py", answer)
         self.assertEqual("backend/retrieval/api_service.py", sources[0]["relative_path"])
-        self.assertEqual("backend/retrieval/support/eval_reports.py", sources[1]["relative_path"])
+        self.assertEqual("backend/retrieval/support/session_indexer.py", sources[1]["relative_path"])
         generate_answer.assert_not_called()
 
     @patch("retrieval.generation.code_answers._read_source_excerpt")

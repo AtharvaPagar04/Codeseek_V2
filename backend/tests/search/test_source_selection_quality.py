@@ -37,7 +37,7 @@ def test_indexing_query_prefers_ingestion_sources_over_evaluation_ui() -> None:
     selected = select_sources_for_display(
         "explain me the indexing in current project",
         [
-            _src("frontend/src/components/EvaluationPanel.jsx", "EvaluationPanel", score=0.99),
+            _src("frontend/src/components/SessionView.jsx", "SessionView", score=0.99),
             _src("pipeline/ingest.py", "run_pipeline", score=0.4),
             _src("pipeline/discovery.py", "discover_files", score=0.4),
             _src("pipeline/vector_storage.py", "store_chunks", score=0.4),
@@ -47,19 +47,19 @@ def test_indexing_query_prefers_ingestion_sources_over_evaluation_ui() -> None:
 
     paths = [source["relative_path"] for source in selected[:4]]
     assert any("ingest" in path or "pipeline" in path or "index" in path for path in paths)
-    assert paths[0] != "frontend/src/components/EvaluationPanel.jsx"
+    assert paths[0] != "frontend/src/components/SessionView.jsx"
 
 
 def test_ui_query_can_keep_frontend_evaluation_source() -> None:
     selected = select_sources_for_display(
         "where is the evaluation dashboard UI implemented",
         [
-            _src("frontend/src/components/EvaluationPanel.jsx", "EvaluationPanel", score=0.9),
+            _src("frontend/src/components/SessionView.jsx", "SessionView", score=0.9),
             _src("pipeline/ingest.py", "run_pipeline", score=0.5),
         ],
     )
 
-    assert selected[0]["relative_path"] == "frontend/src/components/EvaluationPanel.jsx"
+    assert selected[0]["relative_path"] == "frontend/src/components/SessionView.jsx"
 
 
 def test_source_cards_location_prefers_frontend_rendering_sources() -> None:
@@ -98,7 +98,7 @@ def test_indexing_reasoning_context_excludes_unrelated_frontend_and_eval_reports
     display, reasoning = split_sources_two_layer(
         "explain me the indexing in current project",
         [
-            _src("frontend/src/components/EvaluationPanel.jsx", "EvaluationPanel", score=0.99),
+            _src("frontend/src/components/SessionView.jsx", "SessionView", score=0.99),
             _src("backend/evals/reports/retrieval_latest.json", "<file>", score=0.95),
             _src("backend/scripts/lexical_layer_benchmark.py", "main", score=0.9),
             _src("pipeline/ingest.py", "run_pipeline", score=0.4),
@@ -111,7 +111,7 @@ def test_indexing_reasoning_context_excludes_unrelated_frontend_and_eval_reports
     reasoning_paths = [source["relative_path"] for source in reasoning]
     assert "pipeline/ingest.py" in reasoning_paths
     assert "pipeline/vector_storage.py" in reasoning_paths
-    assert "frontend/src/components/EvaluationPanel.jsx" not in reasoning_paths
+    assert "frontend/src/components/SessionView.jsx" not in reasoning_paths
     assert "backend/evals/reports/retrieval_latest.json" not in reasoning_paths
     assert "backend/scripts/lexical_layer_benchmark.py" not in reasoning_paths
     assert [source["relative_path"] for source in display[:2]][0].startswith(
@@ -124,7 +124,7 @@ def test_retrieval_reasoning_context_keeps_pipeline_sources_not_benchmarks() -> 
         "how does the retrieval pipeline generate an answer",
         [
             _src("backend/scripts/lexical_layer_benchmark.py", "run_case", score=0.99),
-            _src("frontend/src/components/EvaluationPanel.jsx", "EvaluationPanel", score=0.8),
+            _src("frontend/src/components/SessionView.jsx", "SessionView", score=0.8),
             _src("server/rag/query_processor.py", "process_query", score=0.5),
             _src("server/rag/searcher.py", "search", score=0.5),
             _src("server/rag/main.py", "run_query", score=0.5),
@@ -138,7 +138,7 @@ def test_retrieval_reasoning_context_keeps_pipeline_sources_not_benchmarks() -> 
     assert "server/rag/searcher.py" in reasoning_paths
     assert "server/rag/main.py" in reasoning_paths
     assert "backend/scripts/lexical_layer_benchmark.py" not in reasoning_paths
-    assert "frontend/src/components/EvaluationPanel.jsx" not in reasoning_paths
+    assert "frontend/src/components/SessionView.jsx" not in reasoning_paths
 
 
 def test_runtime_components_query_demotes_helper_functions() -> None:
