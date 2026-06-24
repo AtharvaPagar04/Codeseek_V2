@@ -1296,10 +1296,25 @@ def get_embedding_config_v1(
     authorization: str | None = Header(default=None),
 ) -> dict:
     user = _require_auth_user(session_token, authorization)
-    from retrieval.stores.embedding_store import get_embedding_config
+    from retrieval.stores.embedding_store import get_embedding_config, list_embedding_configs
     from retrieval.support.embedding_provider import get_embedding_provider_config
 
     saved = get_embedding_config(user["id"])
+    all_configs = list_embedding_configs(user["id"])
+
+    profiles = {}
+    for conf in all_configs:
+        profiles["local" if conf["provider"] in {"ollama", "local"} else "api"] = {
+            "mode": "local" if conf["provider"] in {"ollama", "local"} else "api",
+            "provider": conf["provider"],
+            "base_url": conf.get("base_url", ""),
+            "model": conf.get("model", ""),
+            "dimensions": conf.get("dimensions", 0),
+            "timeout_seconds": conf.get("timeout_seconds", 60),
+            "batch_size": conf.get("batch_size", 64),
+            "has_secret": conf.get("has_secret", False),
+        }
+
     if saved:
         return {
             "mode": "local" if saved["provider"] in {"ollama", "local"} else "api",
@@ -1309,8 +1324,9 @@ def get_embedding_config_v1(
             "dimensions": saved.get("dimensions", 0),
             "timeout_seconds": saved.get("timeout_seconds", 60),
             "batch_size": saved.get("batch_size", 64),
-            "has_secret": bool(saved.get("api_key", "")),
+            "has_secret": saved.get("has_secret", False),
             "source": "stored",
+            "profiles": profiles
         }
 
     env_config = get_embedding_provider_config()
@@ -1324,6 +1340,7 @@ def get_embedding_config_v1(
         "batch_size": env_config.batch_size,
         "has_secret": bool(env_config.api_key),
         "source": "env",
+        "profiles": profiles
     }
 
 
@@ -1360,12 +1377,15 @@ def update_embedding_config_v1(
     _validate_provider_mode(mode, body.base_url)
 
     provider = body.provider.strip().lower()
-    if mode == "local":
-        provider = "local"
-    elif provider not in {"local", "openai_compatible"}:
-        raise HTTPException(status_code=400, detail="Unsupported provider")
+    is_local_mode = mode == "local" or provider in {"local", "ollama"}
 
-    api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret) if mode != "local" else ""
+    if is_local_mode:
+        provider = "local"
+        api_key = ""
+    else:
+        if provider not in {"openai_compatible"}:
+            raise HTTPException(status_code=400, detail="Unsupported provider")
+        api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
 
     if mode == "api" and provider == "openai_compatible":
         if not body.base_url:
@@ -1402,6 +1422,21 @@ def update_embedding_config_v1(
         provider=provider,
     )
 
+    from retrieval.stores.embedding_store import list_embedding_configs
+    all_configs = list_embedding_configs(user["id"])
+    profiles = {}
+    for conf in all_configs:
+        profiles["local" if conf["provider"] in {"ollama", "local"} else "api"] = {
+            "mode": "local" if conf["provider"] in {"ollama", "local"} else "api",
+            "provider": conf["provider"],
+            "base_url": conf.get("base_url", ""),
+            "model": conf.get("model", ""),
+            "dimensions": conf.get("dimensions", 0),
+            "timeout_seconds": conf.get("timeout_seconds", 60),
+            "batch_size": conf.get("batch_size", 64),
+            "has_secret": bool(conf.get("api_key", "")),
+        }
+
     return {
         "mode": mode,
         "provider": record["provider"],
@@ -1410,8 +1445,9 @@ def update_embedding_config_v1(
         "dimensions": record.get("dimensions", 0),
         "timeout_seconds": record.get("timeout_seconds", 60),
         "batch_size": record.get("batch_size", 64),
-        "has_secret": bool(record.get("api_key", "")),
+        "has_secret": record.get("has_secret", False),
         "source": "stored",
+        "profiles": profiles
     }
 
 
@@ -1423,18 +1459,21 @@ def test_embedding_config_v1(
 ) -> dict:
     user = _require_auth_user(session_token, authorization)
     from retrieval.support.embedding_provider import EmbeddingProviderConfig, get_embedding_provider
-    from retrieval.stores.embedding_store import get_embedding_config
+    from retrieval.stores.embedding_store import get_embedding_config_with_secret
 
     mode = body.mode.strip().lower()
     _validate_provider_mode(mode, body.base_url)
 
     provider = body.provider.strip().lower()
-    if mode == "local":
-        provider = "local"
-    elif provider not in {"local", "openai_compatible"}:
-        raise HTTPException(status_code=400, detail="Unsupported provider")
+    is_local_mode = mode == "local" or provider in {"local", "ollama"}
 
-    api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret) if mode != "local" else ""
+    if is_local_mode:
+        provider = "local"
+        api_key = ""
+    else:
+        if provider not in {"openai_compatible"}:
+            raise HTTPException(status_code=400, detail="Unsupported provider")
+        api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
     if mode == "api" and provider == "openai_compatible":
         if not body.base_url:
             raise HTTPException(status_code=400, detail="base_url is required for openai_compatible")
@@ -1442,7 +1481,7 @@ def test_embedding_config_v1(
         _validate_openai_compatible_config((body.model or "").strip(), body.dimensions)
 
         if not api_key:
-            existing = get_embedding_config(user["id"])
+            existing = get_embedding_config_with_secret(user["id"])
             if existing and existing["provider"] == "openai_compatible" and existing.get("api_key"):
                 api_key = existing["api_key"]
             else:
@@ -1499,10 +1538,13 @@ def create_provider_credential_v1(
     user = _require_auth_user(session_token, authorization)
     mode = body.mode.strip().lower()
     provider = body.provider.strip().lower()
-    if mode == "local":
-        provider = "local"
+    is_local_mode = mode == "local" or provider in {"local", "ollama"}
 
-    api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret) if mode != "local" else ""
+    if is_local_mode:
+        provider = "local"
+        api_key = ""
+    else:
+        api_key = _resolve_submitted_secret(body.api_key, body.encrypted_secret)
     model = (body.model or "").strip()
     label = (body.label or "").strip()
 
