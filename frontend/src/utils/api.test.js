@@ -874,3 +874,61 @@ test('testEmbeddingConfig sends correct local payload without encryption', async
     globalThis.fetch = originalFetch;
   }
 });
+
+test('createProviderCredential in API mode with empty apiKey does not include encrypted_secret', async () => {
+  const originalFetch = globalThis.fetch;
+  let finalBody = null;
+  globalThis.fetch = async (url, options) => {
+    finalBody = JSON.parse(options.body);
+    return {
+      ok: true,
+      json: async () => ({ provider_credential: { id: 'api-2' } })
+    };
+  };
+
+  try {
+    const { createProviderCredential } = await import('./api.js');
+    await createProviderCredential({
+      mode: 'api',
+      provider: 'aicredits',
+      label: 'API Dev',
+      apiKey: '',
+      model: 'gpt-4o',
+      isActive: true,
+    });
+    assert.equal(finalBody.mode, 'api');
+    assert.equal(finalBody.provider, 'aicredits');
+    assert.equal(finalBody.encrypted_secret, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('saveEmbeddingConfig in API mode with empty apiKey does not include encrypted_secret', async () => {
+  const originalFetch = globalThis.fetch;
+  let finalBody = null;
+  globalThis.fetch = async (url, options) => {
+    finalBody = JSON.parse(options.body);
+    return {
+      ok: true,
+      json: async () => ({ ok: true })
+    };
+  };
+
+  try {
+    const { saveEmbeddingConfig } = await import('./api.js');
+    await saveEmbeddingConfig({
+      mode: 'api',
+      provider: 'openai_compatible',
+      baseUrl: 'http://example',
+      model: 'test',
+      apiKey: '',
+      dimensions: 256,
+    });
+    assert.equal(finalBody.mode, 'api');
+    assert.equal(finalBody.provider, 'openai_compatible');
+    assert.equal(finalBody.encrypted_secret, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

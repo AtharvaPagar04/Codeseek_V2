@@ -518,11 +518,12 @@ export const listProviderCredentials = async () => {
 
 export const createProviderCredential = async ({ mode, provider, label, apiKey, model = '', isActive }) => {
   const normalizedProvider = `${provider || ''}`.trim().toLowerCase();
-  const normalizedApiKey = `${apiKey || ''}`.trim();
-  const encryptedSecret =
-    mode === 'local' || (normalizedProvider === 'local' && !normalizedApiKey)
-      ? null
-      : await encryptSecretForSubmission(normalizedApiKey);
+  const normalizedApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
+  let encryptedSecret = null;
+
+  if (normalizedApiKey && mode !== 'local') {
+    encryptedSecret = await encryptSecretForSubmission(normalizedApiKey);
+  }
   const res = await withNetworkError(
     () =>
       fetch(`${API_BASE}/api/v1/provider-credentials`, {
@@ -776,9 +777,10 @@ export const getEmbeddingConfig = async () => {
 
 export const saveEmbeddingConfig = async (payload) => {
   const { mode, provider, baseUrl, model, apiKey, dimensions, timeoutSeconds, batchSize } = payload;
+  const normalizedApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
   let encryptedSecret = null;
-  if (apiKey && mode !== 'local') {
-    encryptedSecret = await encryptSecretForSubmission(apiKey);
+  if (normalizedApiKey && mode !== 'local') {
+    encryptedSecret = await encryptSecretForSubmission(normalizedApiKey);
   }
       
   const res = await withNetworkError(
@@ -805,9 +807,10 @@ export const saveEmbeddingConfig = async (payload) => {
 
 export const testEmbeddingConfig = async (payload) => {
   const { mode, provider, baseUrl, model, apiKey, dimensions } = payload;
+  const normalizedApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
   let encryptedSecret = null;
-  if (apiKey && mode !== 'local') {
-    encryptedSecret = await encryptSecretForSubmission(apiKey);
+  if (normalizedApiKey && mode !== 'local') {
+    encryptedSecret = await encryptSecretForSubmission(normalizedApiKey);
   }
 
   const res = await withNetworkError(

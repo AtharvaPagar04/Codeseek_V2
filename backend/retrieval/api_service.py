@@ -1373,19 +1373,6 @@ def update_embedding_config_v1(
 
         _validate_openai_compatible_config((body.model or "").strip(), body.dimensions)
 
-        # Keep existing key if empty
-        if not api_key:
-            existing = get_embedding_config(user["id"])
-            if existing and existing["provider"] == "openai_compatible" and existing.get("api_key"):
-                api_key = existing["api_key"]
-            else:
-                from retrieval.support.embedding_provider import get_embedding_provider_config
-                env_config = get_embedding_provider_config()
-                if env_config.api_key:
-                    api_key = env_config.api_key
-                else:
-                    raise HTTPException(status_code=400, detail="api_key is required")
-
     from retrieval.stores.auth_store import ensure_api_user
     ensure_api_user(user)
 
@@ -1400,6 +1387,8 @@ def update_embedding_config_v1(
             timeout_seconds=body.timeout_seconds or 60.0,
             batch_size=body.batch_size or 64,
         )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         import sqlite3
         if isinstance(e, sqlite3.IntegrityError):
@@ -1521,8 +1510,6 @@ def create_provider_credential_v1(
         raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
     if not provider or not label:
         raise HTTPException(status_code=400, detail="provider and label are required")
-    if mode == "api" and provider != "local" and not api_key:
-        raise HTTPException(status_code=400, detail="api_key is required for API provider")
 
     from retrieval.stores.auth_store import ensure_api_user
     ensure_api_user(user)

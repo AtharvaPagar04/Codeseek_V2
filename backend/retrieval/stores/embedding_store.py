@@ -59,15 +59,27 @@ def upsert_embedding_config(
         ).fetchone()
         
         if existing:
-            cursor.execute(
-                """
-                UPDATE user_embedding_configs
-                SET provider = ?, base_url = ?, model = ?, encrypted_api_key = ?, dimensions = ?, timeout_seconds = ?, batch_size = ?, updated_at = ?
-                WHERE user_id = ?
-                """,
-                (provider, base_url, model, encrypted_key, dimensions, timeout_seconds, batch_size, now, user_id)
-            )
+            if encrypted_key:
+                cursor.execute(
+                    """
+                    UPDATE user_embedding_configs
+                    SET provider = ?, base_url = ?, model = ?, encrypted_api_key = ?, dimensions = ?, timeout_seconds = ?, batch_size = ?, updated_at = ?
+                    WHERE user_id = ?
+                    """,
+                    (provider, base_url, model, encrypted_key, dimensions, timeout_seconds, batch_size, now, user_id)
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE user_embedding_configs
+                    SET provider = ?, base_url = ?, model = ?, dimensions = ?, timeout_seconds = ?, batch_size = ?, updated_at = ?
+                    WHERE user_id = ?
+                    """,
+                    (provider, base_url, model, dimensions, timeout_seconds, batch_size, now, user_id)
+                )
         else:
+            if provider != "local" and not encrypted_key:
+                raise ValueError("API key is required for first-time remote provider configuration.")
             cursor.execute(
                 """
                 INSERT INTO user_embedding_configs (

@@ -74,15 +74,30 @@ def create_provider_credential(
     if provider not in SUPPORTED_PROVIDER_TYPES:
         raise ValueError(f"Unsupported provider: {provider}")
     secret = api_key.strip()
+    encrypted_api_key = encrypt_secret(secret) if secret else ""
+
     if provider != "local" and not secret:
-        raise ValueError("api_key is required for remote providers")
+        with db_cursor() as (_conn, cursor):
+            existing = cursor.execute(
+                """
+                SELECT encrypted_api_key FROM user_provider_credentials
+                WHERE user_id = ? AND provider = ? AND is_active = 1
+                LIMIT 1
+                """,
+                (user_id, provider)
+            ).fetchone()
+            if existing and existing["encrypted_api_key"]:
+                encrypted_api_key = existing["encrypted_api_key"]
+            else:
+                raise ValueError("API key is required for first-time remote provider configuration.")
+
     now = _now()
     credential = {
         "id": uuid.uuid4().hex,
         "user_id": user_id,
         "provider": provider,
         "label": label.strip(),
-        "encrypted_api_key": encrypt_secret(secret),
+        "encrypted_api_key": encrypted_api_key,
         "model": model.strip(),
         "is_active": bool(set_active),
         "created_at": now,
@@ -187,9 +202,10 @@ def _row_to_credential(row, *, include_api_key: bool) -> dict:
         "label": row["label"],
         "model": row["model"] or "",
         "is_active": bool(row["is_active"]),
+        "has_secret": bool(row["encrypted_api_key"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
     if include_api_key:
-        payload["api_key"] = decrypt_secret(row["encrypted_api_key"])
+        payload["api_key"] = decrypt_secret(row["encrypted_api_key"]) if row["encrypted_api_key"] else ""
     return payload
