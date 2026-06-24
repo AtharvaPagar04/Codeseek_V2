@@ -1,0 +1,37 @@
+backend/.venv/
+**/.env
+backend/.env
+frontend/.env
+frontend/node_modules/
+frontend/dist/
+__pycache__/
+
+# Runtime artifacts
+*.db
+data/codeseek.db
+backend/data/codeseek.db
+data/codeseek.db-shm
+data/codeseek.db-wal
+backend/data/codeseek.db-shm
+backend/data/codeseek.db-wal
+:memory:
+.rag_ingestion_state.json
+eval_output.txt
+out*.txt
+failures_analysis.json
+
+# Local AI tooling configs — not project source
+.agents/
+.codex/
+.continue/agents/
+
+# Benchmark caches
+.benchmarks/
+backend/.benchmarks/
+
+# Scratch/debug scripts
+backend/scratch/
+
+# Generated evaluation reports
+evals/reports/
+backend/evals/reports/

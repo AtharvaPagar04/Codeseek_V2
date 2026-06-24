@@ -1,0 +1,113 @@
+groups:
+  - name: codeseek.backend
+    rules:
+      # ─── Backend availability ───────────────────────────────────────────────
+      - alert: BackendDown
+        expr: up{job="codeseek-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Codeseek backend is unreachable"
+          description: >
+            The codeseek-api scrape target has been down for more than 1 minute.
+            Check container status: docker compose ps codeseek-api
+
+      - alert: BackendStartupErrors
+        expr: codeseek_retrieval_errors_total{error_type="internal"} > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated internal retrieval errors"
+          description: >
+            codeseek_retrieval_errors_total{error_type="internal"} has exceeded 10
+            in the last 5 minutes. Check backend logs for tracebacks.
+
+      # ─── Indexing failures ──────────────────────────────────────────────────
+      - alert: IndexingFailures
+        expr: codeseek_retrieval_errors_total{error_type="isolation"} > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Repo indexing isolation errors detected"
+          description: >
+            Collection isolation errors are occurring. A session may be bound to
+            the wrong collection. Review recent session creation logs.
+
+      # ─── Provider rate-limiting ─────────────────────────────────────────────
+      - alert: ProviderRateLimitSpike
+        expr: rate(codeseek_api_requests_total{status="429"}[5m]) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Provider rate-limit responses spiking"
+          description: >
+            More than 0.1 req/s with status 429 over the last 5 minutes.
+            Consider switching provider credentials or adding request throttling.
+
+      # ─── Auth failures ──────────────────────────────────────────────────────
+      - alert: AuthFailureSpike
+        expr: rate(codeseek_api_requests_total{status="401"}[5m]) > 0.2
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated 401 auth failures"
+          description: >
+            More than 0.2 req/s returning 401 over the last 5 minutes.
+            Sessions may be expiring or an invalid API key is being used.
+
+      # ─── Latency ────────────────────────────────────────────────────────────
+      - alert: HighQueryLatency
+        expr: >
+          histogram_quantile(0.95,
+            rate(codeseek_api_request_latency_seconds_bucket{path="/api/v1/query"}[10m])
+          ) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 query latency > 30s"
+          description: >
+            The 95th-percentile query latency has exceeded 30 seconds for
+            5 consecutive minutes. Check provider API health and Qdrant performance.
+
+  - name: codeseek.qdrant
+    rules:
+      - alert: QdrantDown
+        expr: up{job="qdrant"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Qdrant is unreachable"
+          description: >
+            The Qdrant scrape target has been down for more than 1 minute.
+            Check container status: docker compose ps qdrant
+
+  - name: codeseek.postgres
+    rules:
+      - alert: PostgresDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Postgres is unreachable"
+          description: >
+            The postgres_exporter scrape target has been down for more than 1 minute.
+            Check container status: docker compose ps postgres
+
+      - alert: PostgresConnectionsHigh
+        expr: pg_stat_activity_count > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres active connections > 80"
+          description: >
+            Active Postgres connections have exceeded 80 for 5 minutes.
+            Review connection pooling and idle session cleanup.

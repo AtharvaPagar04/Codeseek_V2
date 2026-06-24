@@ -1,0 +1,147 @@
+{
+  "name": "codeseek-retrieval-eval-hard-v1",
+  "repo_root_hint": "/home/arch/DEV/RAG/Codeseek",
+  "cases": [
+    {
+      "id": "cs-001",
+      "query": "Where is the ingestion pipeline entrypoint main function defined?",
+      "expected_sources": [
+        {"relative_path": "rag_ingestion/main.py", "symbol_name": "main"}
+      ]
+    },
+    {
+      "id": "cs-002",
+      "query": "Which function orchestrates ingestion stages end-to-end?",
+      "expected_sources": [
+        {"relative_path": "rag_ingestion/main.py", "symbol_name": "run_pipeline"}
+      ]
+    },
+    {
+      "id": "cs-003",
+      "query": "Where are unchanged files detected for incremental skip?",
+      "expected_sources": [
+        {"relative_path": "rag_ingestion/utils/state.py", "symbol_name": "is_file_unchanged"}
+      ]
+    },
+    {
+      "id": "cs-004",
+      "query": "Where is ingestion state loaded and saved?",
+      "expected_sources": [
+        {"relative_path": "rag_ingestion/utils/state.py", "symbol_name": "load_ingestion_state"},
+        {"relative_path": "rag_ingestion/utils/state.py", "symbol_name": "save_ingestion_state"}
+      ]
+    },
+    {
+      "id": "cs-005",
+      "query": "Which storage function deletes stale chunks for removed files?",
+      "expected_sources": [
+        {"relative_path": "rag_ingestion/stages/storage.py", "symbol_name": "delete_chunks_for_paths"}
+      ]
+    },
+    {
+      "id": "cs-006",
+      "query": "Where is deterministic chunk_id metadata generated?",
+      "expected_sources": [
+        {"relative_path": "rag_ingestion/stages/metadata.py", "symbol_name": "build_metadata"}
+      ]
+    },
+    {
+      "id": "cs-007",
+      "query": "Which function builds qualified_symbol values for retrieval?",
+      "expected_sources": [
+        {"relative_path": "rag_ingestion/stages/metadata.py", "symbol_name": "_qualified_symbol"}
+      ]
+    },
+    {
+      "id": "cs-008",
+      "query": "Where are Qdrant payload fields assembled before upsert?",
+      "expected_sources": [
+        {"relative_path": "rag_ingestion/stages/storage.py", "symbol_name": "_payload"}
+      ]
+    },
+    {
+      "id": "cs-009",
+      "query": "Which function handles chunk overflow splitting?",
+      "expected_sources": [
+        {"relative_path": "rag_ingestion/stages/overflow.py", "symbol_name": "handle_overflow"}
+      ]
+    },
+    {
+      "id": "cs-010",
+      "query": "Where does parser extract symbol signatures?",
+      "expected_sources": [
+        {"relative_path": "rag_ingestion/stages/parser.py", "symbol_name": "_signature"}
+      ]
+    },
+    {
+      "id": "cs-011",
+      "query": "Which retrieval stage performs dense vector search?",
+      "expected_sources": [
+        {"relative_path": "retrieval/search/searcher.py", "symbol_name": "_dense_search"}
+      ]
+    },
+    {
+      "id": "cs-012",
+      "query": "Where are retrieval results merged and deduplicated?",
+      "expected_sources": [
+        {"relative_path": "retrieval/search/searcher.py", "symbol_name": "_merge_results"}
+      ]
+    },
+    {
+      "id": "cs-013",
+      "query": "Which function applies lexical reranking to search candidates?",
+      "expected_sources": [
+        {"relative_path": "retrieval/search/searcher.py", "symbol_name": "_rerank_with_query_tokens"}
+      ]
+    },
+    {
+      "id": "cs-014",
+      "query": "Where are parent and callee expansions implemented?",
+      "expected_sources": [
+        {"relative_path": "retrieval/search/expander.py", "symbol_name": "_parent_chunk"},
+        {"relative_path": "retrieval/search/expander.py", "symbol_name": "_callee_chunks"}
+      ]
+    },
+    {
+      "id": "cs-015",
+      "query": "Which retrieval function assembles final context and sources?",
+      "expected_sources": [
+        {"relative_path": "retrieval/generation/assembler.py", "symbol_name": "assemble"}
+      ]
+    },
+    {
+      "id": "cs-016",
+      "query": "Where is source display filtering and test-source suppression implemented?",
+      "expected_sources": [
+        {"relative_path": "retrieval/search/source_filter.py", "symbol_name": "select_sources_for_display"},
+        {"relative_path": "retrieval/search/source_filter.py", "symbol_name": "is_test_source"}
+      ]
+    },
+    {
+      "id": "cs-017",
+      "query": "Which function calls Groq to generate the final answer?",
+      "expected_sources": [
+        {"relative_path": "retrieval/generation/llm.py", "symbol_name": "_groq_answer"}
+      ]
+    },
+    {
+      "id": "cs-018",
+      "query": "Where is the retrieval CLI entrypoint and interactive loop?",
+      "expected_sources": [
+        {"relative_path": "retrieval/main.py", "symbol_name": "main"}
+      ]
+    },
+    {
+      "id": "cs-019",
+      "query": "Which script performs retrieval metric threshold checks for CI?",
+      "expected_sources": [
+        {"relative_path": "scripts/check_retrieval_metrics.py", "symbol_name": "main"}
+      ]
+    },
+    {
+      "id": "cs-020",
+      "query": "Where is OAuth refresh token flow implemented in this project?",
+      "expected_sources": []
+    }
+  ]
+}

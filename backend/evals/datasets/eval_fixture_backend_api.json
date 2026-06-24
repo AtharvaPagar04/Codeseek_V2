@@ -1,0 +1,24 @@
+{
+  "name": "fixture-backend-api-v1",
+  "repo_root_hint": "tests/fixtures/retrieval_repos/backend_api",
+  "cases": [
+    {
+      "id": "fixture-backend-001",
+      "query": "What is this backend project about?",
+      "expected_files": ["__repo_summary__.md", "README.md"],
+      "expected_frameworks": ["FastAPI"]
+    },
+    {
+      "id": "fixture-backend-002",
+      "query": "Where is qdrant-client declared?",
+      "expected_files": ["requirements.txt"],
+      "expected_dependencies": ["qdrant-client"]
+    },
+    {
+      "id": "fixture-backend-003",
+      "query": "What command starts the backend container?",
+      "expected_files": ["Dockerfile"],
+      "expected_dependencies": ["uvicorn"]
+    }
+  ]
+}

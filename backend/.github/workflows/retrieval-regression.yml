@@ -1,0 +1,146 @@
+name: Retrieval Regression
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  retrieval-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run retrieval source-filter tests
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m unittest -v \
+            tests/test_retrieval_source_filtering.py \
+            tests/test_retrieval_source_filtering_integration.py
+
+  retrieval-eval-gate:
+    runs-on: ubuntu-latest
+    services:
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Clone Trading-Bot fixture repo
+        run: |
+          git clone https://github.com/AtharvaPagar04/Trading-Bot /tmp/trading-bot-e2e
+
+      - name: Run multi-repo retrieval eval suite
+        env:
+          CODESEEK_TENANT_ID: ci
+          CODESEEK_STRICT_ISOLATION: "1"
+          RETRIEVAL_TOP_K_DENSE: "15"
+          RETRIEVAL_TOP_K_AFTER_MERGE: "12"
+          RETRIEVAL_CALL_EXPANSION_LIMIT: "8"
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python scripts/retrieval_eval_suite.py \
+            --suite-file docs/retrieval_docs/eval_suite_multi_repo.json \
+            --json-out /tmp/retrieval_suite_metrics.json
+
+      - name: Enforce per-dataset thresholds and citation regression alerts
+        run: |
+          python scripts/check_retrieval_suite_metrics.py \
+            --metrics-json /tmp/retrieval_suite_metrics.json \
+            --thresholds-json docs/retrieval_docs/eval_thresholds_multi_repo.json
+
+  api-integration-gate:
+    runs-on: ubuntu-latest
+    services:
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Clone Trading-Bot fixture repo
+        run: |
+          git clone https://github.com/AtharvaPagar04/Trading-Bot /tmp/trading-bot-e2e
+
+      - name: Ingest fixture for API tests
+        env:
+          CODESEEK_TENANT_ID: ci
+          CODESEEK_STRICT_ISOLATION: "1"
+        run: |
+          python -m rag_ingestion.main /tmp/trading-bot-e2e
+
+      - name: Start API service
+        env:
+          GROQ_API_KEY: dummy-key-for-ci
+          CODESEEK_API_KEY: ci-test-key
+          CODESEEK_TENANT_ID: ci
+          CODESEEK_STRICT_ISOLATION: "1"
+          CODESEEK_STRICT_ENV_VALIDATION: "0"
+          RETRIEVAL_REPO_ROOT: /tmp/trading-bot-e2e
+          QDRANT_HOST: localhost
+          QDRANT_PORT: "6333"
+        run: |
+          nohup uvicorn retrieval.api_service:app --host 0.0.0.0 --port 8000 >/tmp/codeseek_api.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/api/v1/health >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:8000/api/v1/health
+
+      - name: Run API black-box checks
+        run: |
+          python scripts/api_blackbox_check.py \
+            --base-url http://localhost:8000 \
+            --api-key ci-test-key \
+            --query "Trace account_info to final HTTP request and signature attachment"
+
+      - name: Run API load smoke gate
+        run: |
+          python scripts/load_test_api.py \
+            --base-url http://localhost:8000 \
+            --api-key ci-test-key \
+            --query "Where is account_info implemented?" \
+            --requests 20 \
+            --concurrency 5 \
+            --timeout-seconds 120 \
+            --max-error-rate 0.10 \
+            --max-p95-ms 8000
