@@ -223,7 +223,6 @@ export default function SessionView({
     setDismissedFreshnessPrompt(false);
     setShowUpToDatePopup(false);
     setShowSettingsModal(false);
-    setShowEvaluation(false);
     setShowMetadata(false);
   }, [session.id]);
 
@@ -238,14 +237,7 @@ export default function SessionView({
       ) {
         setShowMetadata(false);
       }
-      if (
-        evaluationRef.current &&
-        !evaluationRef.current.contains(e.target) &&
-        evaluationBtnRef.current &&
-        !evaluationBtnRef.current.contains(e.target)
-      ) {
-        setShowEvaluation(false);
-      }
+
     };
     window.addEventListener('click', handleOutsideClick);
     return () => window.removeEventListener('click', handleOutsideClick);
