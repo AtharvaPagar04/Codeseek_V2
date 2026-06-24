@@ -1,7 +1,7 @@
 export const OPENAI_COMPATIBLE_EMBEDDING_MODELS = {
-  "openai/text-embedding-3-small": [512, 1536],
   "text-embedding-3-small": [512, 1536],
-  "openai/text-embedding-3-large": [256, 1024, 3072],
+  "text-embedding-3-small": [512, 1536],
+  "text-embedding-3-large": [256, 1024, 3072],
   "text-embedding-3-large": [256, 1024, 3072],
   "openai/text-embedding-ada-002": [1536],
   "text-embedding-ada-002": [1536],

@@ -94,6 +94,9 @@ export const formatApiError = ({ action, status, detail = '' }) => {
   if (normalizedDetail.includes('Provider request failed upstream')) {
     return `${action} failed (${status}): provider request failed upstream. Retry shortly or switch provider credentials.`;
   }
+  if (normalizedDetail.includes('invalid model ID')) {
+    return `The embedding provider rejected this model ID. Check the embedding model name for your selected provider.`;
+  }
   return `${action} failed (${status})${normalizedDetail ? `: ${normalizedDetail}` : ''}`;
 };
 

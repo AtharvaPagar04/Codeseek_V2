@@ -169,7 +169,7 @@ def test_put_embedding_config_openai_compatible(auth_client):
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "openai/text-embedding-3-small",
+        "model": "text-embedding-3-small",
         "api_key": "test_secret_key",
         "dimensions": 1536
     }
@@ -201,7 +201,7 @@ def test_put_embedding_config_empty_key_keeps_existing(auth_client):
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "openai/text-embedding-3-small",
+        "model": "text-embedding-3-small",
         "api_key": "original_key",
         "dimensions": 1536
     }
@@ -211,7 +211,7 @@ def test_put_embedding_config_empty_key_keeps_existing(auth_client):
     payload2 = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com/v2",
-        "model": "openai/text-embedding-3-small",
+        "model": "text-embedding-3-small",
         "api_key": "",
         "dimensions": 1536
     }
@@ -227,7 +227,7 @@ def test_test_endpoint_mocks_cloud(auth_client, monkeypatch):
 
     class MockProvider:
         provider_name = "openai_compatible"
-        model_name = "openai/text-embedding-3-small"
+        model_name = "text-embedding-3-small"
         dimensions = 512
         def embed_query(self, text):
             return [0.1] * 512
@@ -237,7 +237,7 @@ def test_test_endpoint_mocks_cloud(auth_client, monkeypatch):
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "openai/text-embedding-3-small",
+        "model": "text-embedding-3-small",
         "api_key": "test_key",
         "dimensions": 512
     }
@@ -266,7 +266,7 @@ def test_put_embedding_config_invalid_dimensions(auth_client):
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "openai/text-embedding-3-small",
+        "model": "text-embedding-3-small",
         "api_key": "test_secret_key",
         "dimensions": 128
     }
@@ -279,7 +279,7 @@ def test_put_embedding_config_large_model_dimensions(auth_client):
     payload = {
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "openai/text-embedding-3-large",
+        "model": "text-embedding-3-large",
         "api_key": "test_secret_key",
         "dimensions": 0  # 0 means auto, which should be accepted
     }
@@ -315,7 +315,7 @@ def test_get_latest_indexing_job_includes_embedding_metadata(auth_client):
         cursor.execute(
             """
             INSERT INTO repo_sessions (id, tenant_id, user_id, repo_full_name, repo_url, repo_root, collection, status, created_at, updated_at, embedding_provider, embedding_model, embedding_dimensions)
-            VALUES (?, 'prod', ?, 'test/repo', 'https://github.com/test/repo', '/tmp/repo', 'collection', 'ready', ?, ?, 'openai_compatible', 'openai/text-embedding-3-small', 1536)
+            VALUES (?, 'prod', ?, 'test/repo', 'https://github.com/test/repo', '/tmp/repo', 'collection', 'ready', ?, ?, 'openai_compatible', 'text-embedding-3-small', 1536)
             """,
             (session_id, user["id"], now, now)
         )
@@ -332,7 +332,7 @@ def test_get_latest_indexing_job_includes_embedding_metadata(auth_client):
     data = response.json()
     assert data["latest_job"] is not None
     assert data["latest_job"]["embedding_provider"] == "openai_compatible"
-    assert data["latest_job"]["embedding_model"] == "openai/text-embedding-3-small"
+    assert data["latest_job"]["embedding_model"] == "text-embedding-3-small"
     assert data["latest_job"]["embedding_dimensions"] == 1536
 
 def test_local_embedding_does_not_overwrite_cloud_profile(auth_client, monkeypatch):
@@ -344,7 +344,7 @@ def test_local_embedding_does_not_overwrite_cloud_profile(auth_client, monkeypat
         "mode": "api",
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "openai/text-embedding-3-small",
+        "model": "text-embedding-3-small",
         "api_key": "cloud-secret-key",
         "dimensions": 1536
     }
@@ -375,7 +375,7 @@ def test_local_embedding_does_not_overwrite_cloud_profile(auth_client, monkeypat
     api_prof = data["profiles"]["api"]
     assert api_prof["provider"] == "openai_compatible"
     assert api_prof["base_url"] == "https://api.example.com"
-    assert api_prof["model"] == "openai/text-embedding-3-small"
+    assert api_prof["model"] == "text-embedding-3-small"
     assert api_prof["has_secret"] is True
 
 def test_cloud_embedding_reuses_saved_secret_after_local_switch(auth_client, monkeypatch):
@@ -387,7 +387,7 @@ def test_cloud_embedding_reuses_saved_secret_after_local_switch(auth_client, mon
         "mode": "api",
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "openai/text-embedding-3-small",
+        "model": "text-embedding-3-small",
         "api_key": "cloud-secret-key",
         "dimensions": 1536
     })
@@ -407,7 +407,7 @@ def test_cloud_embedding_reuses_saved_secret_after_local_switch(auth_client, mon
         "mode": "api",
         "provider": "openai_compatible",
         "base_url": "https://api.example.com/v2",
-        "model": "openai/text-embedding-3-large",
+        "model": "text-embedding-3-large",
         "api_key": "",
         "dimensions": 3072
     })
@@ -425,7 +425,7 @@ def test_get_embedding_config_returns_profiles(auth_client, monkeypatch):
         "mode": "api",
         "provider": "openai_compatible",
         "base_url": "https://api.example.com",
-        "model": "openai/text-embedding-3-small",
+        "model": "text-embedding-3-small",
         "api_key": "cloud-secret-key",
         "dimensions": 1536
     })
