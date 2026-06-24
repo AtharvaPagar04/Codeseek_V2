@@ -1,14 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
+
 import MessageBubble from './MessageBubble';
 import EmptyState from './EmptyState';
 import ConfirmDialog from './ConfirmDialog';
 import IndexingLiveLog from './IndexingLiveLog';
-import EvaluationPanel from './EvaluationPanel';
 import { useChat } from '../hooks/useChat';
 
-import { listProviderCredentials, fetchSessionRepoStatus, fetchSessionFreshness, indexLatestVersion, fetchLatestEvaluationReport, fetchIndexPreview, indexSessionIncremental, fetchLatestIndexingJob, cancelLatestIndexingJob, fetchIndexingJobHistory } from '../utils/api';
-
-
+import { listProviderCredentials, fetchSessionRepoStatus, fetchSessionFreshness, indexLatestVersion, fetchIndexPreview, indexSessionIncremental, fetchLatestIndexingJob, cancelLatestIndexingJob, fetchIndexingJobHistory } from '../utils/api';
 
 
 function getProviderFallbackModel(provider) {
@@ -39,11 +37,6 @@ export default function SessionView({
   const [showUpToDatePopup, setShowUpToDatePopup] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showMetadata, setShowMetadata] = useState(false);
-  const [showEvaluation, setShowEvaluation] = useState(false);
-
-  const [evalReport, setEvalReport] = useState(null);
-  const [loadingEval, setLoadingEval] = useState(false);
-  const [evalError, setEvalError] = useState(null);
   const [isReindexing, setIsReindexing] = useState(false);
   const [reindexingError, setReindexingError] = useState(null);
   const [latestJob, setLatestJob] = useState(null);
@@ -135,9 +128,7 @@ export default function SessionView({
 
 
   const metadataRef = useRef(null);
-  const evaluationRef = useRef(null);
   const metadataBtnRef = useRef(null);
-  const evaluationBtnRef = useRef(null);
 
   const fetchActiveProvider = async () => {
     try {
@@ -173,19 +164,6 @@ export default function SessionView({
     }
   };
 
-  const fetchEvaluationReport = async () => {
-    if (session.status === 'indexing') return;
-    setLoadingEval(true);
-    setEvalError(null);
-    try {
-      const data = await fetchLatestEvaluationReport(session.id);
-      setEvalReport(data);
-    } catch (err) {
-      setEvalError(err.message || 'Failed to load evaluation report.');
-    } finally {
-      setLoadingEval(false);
-    }
-  };
 
   useEffect(() => {
     fetchActiveProvider();
@@ -215,10 +193,6 @@ export default function SessionView({
       }
     };
   }, [session.id, session.status, freshnessStatus, isCancelling]);
-
-  useEffect(() => {
-    fetchEvaluationReport();
-  }, [session.id, session.status]);
 
 
   useEffect(() => {
@@ -460,9 +434,6 @@ export default function SessionView({
             onClick={() => {
               const nextVal = !showMetadata;
               setShowMetadata(nextVal);
-              if (nextVal) {
-                setShowEvaluation(false);
-              }
             }}
             title="Session metadata & binding info"
             className={`w-7 h-7 flex items-center justify-center rounded-full border transition-all duration-150 mr-1.5 shrink-0 ${
@@ -475,27 +446,6 @@ export default function SessionView({
             <InfoIcon />
           </button>
 
-          <button
-            ref={evaluationBtnRef}
-            onClick={() => {
-              const nextVal = !showEvaluation;
-              setShowEvaluation(nextVal);
-              if (nextVal) {
-                setShowMetadata(false);
-              }
-            }}
-            title="Evaluation diagnostics dashboard"
-            className={`w-7 h-7 flex items-center justify-center rounded-full border transition-all duration-150 mr-1.5 shrink-0 ${
-              showEvaluation
-                ? 'bg-surface-3 border-text-muted text-text-primary'
-                : 'bg-surface-3 border-border text-text-muted hover:text-text-primary hover:border-text-muted'
-            }`}
-            aria-label="Toggle Evaluation Dashboard"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-            </svg>
-          </button>
 
 
 
@@ -621,20 +571,6 @@ export default function SessionView({
         </div>
       )}
 
-      {/* Collapsible Evaluation Panel */}
-      {showEvaluation && (
-        <div ref={evaluationRef}>
-          <EvaluationPanel
-            report={evalReport}
-            loading={loadingEval}
-            error={evalError}
-            onRefresh={fetchEvaluationReport}
-            sessionId={session.id}
-            repoRoot={session.repo_root}
-            collection={session.collection}
-          />
-        </div>
-      )}
 
       {/* Reindexing Error Notice */}
       {reindexingError && (

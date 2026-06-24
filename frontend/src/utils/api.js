@@ -651,44 +651,6 @@ export const indexLatestVersion = async (sessionId) => {
 
 export const indexLatestSession = indexLatestVersion;
 
-export const fetchLatestEvaluationReport = async (sessionId) => {
-  const res = await withNetworkError(
-    () =>
-      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/evaluation/latest`, {
-        credentials: 'include',
-        credentials: 'include', headers: authHeaders(),
-      }),
-    'Fetch latest evaluation report'
-  );
-  if (!res.ok) await throwApiError('Fetch latest evaluation report', res);
-  return res.json();
-};
-
-export const fetchEvaluationRegressionTests = async (sessionId) => {
-  const res = await withNetworkError(
-    () =>
-      fetch(`${API_BASE}/api/v1/sessions/${sessionId}/evaluation/regression-tests`, {
-        credentials: 'include',
-        credentials: 'include', headers: authHeaders(),
-      }),
-    'Fetch evaluation regression tests'
-  );
-  if (!res.ok) await throwApiError('Fetch evaluation regression tests', res);
-  return res.json();
-};
-
-export const fetchLatestGlobalEvaluationReport = async () => {
-  const res = await withNetworkError(
-    () =>
-      fetch(`${API_BASE}/api/v1/evals/latest`, {
-        credentials: 'include',
-        credentials: 'include', headers: authHeaders(),
-      }),
-    'Fetch latest global evaluation report'
-  );
-  if (!res.ok) await throwApiError('Fetch latest global evaluation report', res);
-  return res.json();
-};
 
 
 export const fetchIndexPreview = async (sessionId) => {

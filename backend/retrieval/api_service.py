@@ -1968,57 +1968,7 @@ def get_session_index_preview_v1(
 
 
 
-@v1.get("/sessions/{session_id}/evaluation/latest")
-def get_latest_evaluation_report_v1(
-    session_id: str,
-    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
-    authorization: str | None = Header(default=None),
-) -> dict:
-    auth_user = _require_auth_user(session_token, authorization)
-    session = get_session(session_id)
-    if not session or not _session_visible_to_user(session, auth_user):
-        raise HTTPException(status_code=404, detail="Session not found")
 
-    from retrieval.support.eval_reports import get_latest_evaluation_report
-    return get_latest_evaluation_report(session_id)
-
-
-@v1.get("/sessions/{session_id}/evaluation/regression-tests")
-def get_evaluation_regression_tests_v1(
-    session_id: str,
-    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
-    authorization: str | None = Header(default=None),
-) -> dict:
-    auth_user = _require_auth_user(session_token, authorization)
-    session = get_session(session_id)
-    if not session or not _session_visible_to_user(session, auth_user):
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    repo_root = session.get("repo_root")
-    if not repo_root or not os.path.isdir(repo_root):
-        return {"tests": []}
-
-    config_path = os.path.join(repo_root, ".codeseek-evals.json")
-    if not os.path.exists(config_path):
-        return {"tests": []}
-
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            import json
-            tests = json.load(f)
-        if not isinstance(tests, list):
-            tests = []
-        return {"tests": tests}
-    except Exception:
-        return {"tests": []}
-@v1.get("/evals/latest")
-def get_latest_global_evaluation_report_v1(
-    session_token: str | None = Cookie(default=None, alias=AUTH_SESSION_COOKIE),
-    authorization: str | None = Header(default=None),
-) -> dict:
-    _require_auth_user(session_token, authorization)
-    from retrieval.support.eval_reports import get_latest_evaluation_report
-    return get_latest_evaluation_report()
 
 
 
