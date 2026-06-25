@@ -82,8 +82,10 @@ def test_incremental_reindex_execution(monkeypatch, tmp_path: Path):
         )
 
     # Mock pipeline operations requiring external services
-    monkeypatch.setattr(pipeline_main, "embed_chunks", lambda chunks, counters: chunks)
+    monkeypatch.setattr("rag_ingestion.stages.embedder.embed_chunks", lambda chunks, counters, **kw: chunks)
     monkeypatch.setattr("retrieval.support.isolation.validate_collection_binding", lambda *a, **kw: None)
+    monkeypatch.setattr("retrieval.session_indexer._embedding_config_status", lambda s: None)
+    monkeypatch.setattr("retrieval.session_indexer._embedding_config_status", lambda s: None)
     monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda *args, **kwargs: commit_sha)
 
     mock_store = MagicMock()
@@ -95,7 +97,7 @@ def test_incremental_reindex_execution(monkeypatch, tmp_path: Path):
     # First, let's clear the session_files metadata so the plan is empty/unavailable
     with pytest.raises(RuntimeError, match="No previously indexed files found"):
         run_incremental_reindex("session-a")
-    
+
     sess_failed = get_session("session-a")
     assert sess_failed["status"] == "failed"
     assert "No previously indexed files" in sess_failed["error"]
@@ -312,8 +314,9 @@ def test_incremental_indexing_detailed_behaviors(monkeypatch, tmp_path: Path):
     ])
 
     # Mock pipeline operations
-    monkeypatch.setattr(pipeline_main, "embed_chunks", lambda chunks, counters: chunks)
+    monkeypatch.setattr("rag_ingestion.stages.embedder.embed_chunks", lambda chunks, counters, **kw: chunks)
     monkeypatch.setattr("retrieval.support.isolation.validate_collection_binding", lambda *a, **kw: None)
+    monkeypatch.setattr("retrieval.session_indexer._embedding_config_status", lambda s: None)
     monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda *args, **kwargs: commit_sha)
 
     mock_store = MagicMock()
@@ -375,7 +378,7 @@ def test_incremental_indexing_detailed_behaviors(monkeypatch, tmp_path: Path):
     # 6. Branch mismatch blocks incremental
     with db_cursor() as (conn, cursor):
         cursor.execute("UPDATE repo_sessions SET indexed_branch = 'other-branch' WHERE id = 'sess-detailed'")
-    
+
     plan_mismatch = session_indexer.build_incremental_reindex_plan("sess-detailed")
     assert not plan_mismatch["can_incremental_reindex"]
     assert "Branch mismatch" in plan_mismatch["reason"]
@@ -481,8 +484,9 @@ def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
     (repo_dir / "added.py").write_text("print('added')", encoding="utf-8")
 
     # Mock default pipeline operations
-    monkeypatch.setattr("rag_ingestion.stages.embedder.embed_chunks", lambda chunks, counters: chunks)
+    monkeypatch.setattr("rag_ingestion.stages.embedder.embed_chunks", lambda chunks, counters, **kw: chunks)
     monkeypatch.setattr("retrieval.support.isolation.validate_collection_binding", lambda *a, **kw: None)
+    monkeypatch.setattr("retrieval.session_indexer._embedding_config_status", lambda s: None)
     monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda *args, **kwargs: commit_sha)
 
     mock_store = MagicMock()
@@ -493,18 +497,18 @@ def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
     # 1. Embedding failure before vector deletion preserves old mappings
     def failing_embed(*args, **kwargs):
         raise ValueError("Embedding engine offline")
-    
+
     # Temporarily patch embedding failure
     with patch("rag_ingestion.stages.embedder.embed_chunks", failing_embed):
         job = create_indexing_job("sess-recovery", "incremental")
         with pytest.raises(ValueError, match="Embedding engine offline"):
             run_incremental_reindex("sess-recovery", job_id=job["id"])
-        
+
         # Verify job and session are marked failed
         sess = get_session("sess-recovery")
         assert sess["status"] == "failed"
         assert "Embedding engine offline" in sess["error"]
-        
+
         with db_cursor() as (conn, cursor):
             cursor.execute("SELECT status, error FROM indexing_jobs WHERE id = ?", (job["id"],))
             job_status, job_err = cursor.fetchone()
@@ -526,7 +530,7 @@ def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
     # 2. Qdrant delete failure marks job failed and does not mark session latest
     def failing_delete(*args, **kwargs):
         raise RuntimeError("Qdrant delete timeout")
-    
+
     monkeypatch.setattr(storage_stage, "delete_vectors_by_ids", failing_delete)
     job = create_indexing_job("sess-recovery", "incremental")
     with pytest.raises(RuntimeError, match="Qdrant delete timeout"):
@@ -535,7 +539,7 @@ def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
     sess = get_session("sess-recovery")
     assert sess["status"] == "failed"
     assert "Qdrant delete timeout" in sess["error"]
-    
+
     with db_cursor() as (conn, cursor):
         cursor.execute("SELECT status, error FROM indexing_jobs WHERE id = ?", (job["id"],))
         job_status, job_err = cursor.fetchone()
@@ -549,7 +553,7 @@ def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
     # 3. Qdrant upsert/store failure marks job failed and does not mark metadata success
     def failing_store(*args, **kwargs):
         raise RuntimeError("Qdrant upsert permission denied")
-    
+
     monkeypatch.setattr(storage_stage, "store_chunks", failing_store)
     job = create_indexing_job("sess-recovery", "incremental")
     with pytest.raises(RuntimeError, match="Qdrant upsert permission denied"):
@@ -558,7 +562,7 @@ def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
     sess = get_session("sess-recovery")
     assert sess["status"] == "failed"
     assert "Qdrant upsert permission denied" in sess["error"]
-    
+
     # Metadata untouched
     files = list_session_files("sess-recovery", include_deleted=True)
     files_by_path = {f["repo_path"]: f for f in files}
@@ -575,7 +579,7 @@ def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
         job = create_indexing_job("sess-recovery", "incremental")
         with pytest.raises(RuntimeError, match="Metadata recording failed"):
             run_incremental_reindex("sess-recovery", job_id=job["id"])
-        
+
         sess = get_session("sess-recovery")
         assert sess["status"] == "failed"
         assert "database is locked" in sess["error"]
@@ -608,10 +612,10 @@ def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
     # 6. Cancellation before deleted-file vector delete leaves old vectors untouched
     # We mock cancel_requested returning True *only* when checking during/after embedding
     job = create_indexing_job("sess-recovery", "incremental")
-    
+
     from retrieval.db import is_indexing_job_cancel_requested as db_cancel_requested
     original_cancel_requested = db_cancel_requested
-    
+
     # We want cancel to return True when we reach the storage phase
     call_count = 0
     def mock_cancel_check(jid):
@@ -621,9 +625,9 @@ def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
         if call_count >= 3:
             return True
         return False
-        
+
     monkeypatch.setattr("retrieval.db.is_indexing_job_cancel_requested", mock_cancel_check)
-    
+
     mock_store.reset_mock()
     mock_delete.reset_mock()
 
@@ -631,7 +635,7 @@ def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
 
     mock_store.assert_not_called()
     mock_delete.assert_not_called()
-    
+
     sess = get_session("sess-recovery")
     assert sess["status"] == "failed"
     assert "cancelled" in sess["error"]
@@ -651,4 +655,34 @@ def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
     # 8. Full Index latest remains available after failed incremental indexing
     preview = session_indexer.get_session_index_preview("sess-recovery", "user-123")
     assert preview["can_index_latest"] is True
+
+
+def test_missing_collection_skips_stale_deletion(monkeypatch, tmp_path: Path):
+    from rag_ingestion.stages.storage import delete_chunks_for_paths, delete_vectors_by_ids
+
+    mock_qdrant = MagicMock()
+    mock_qdrant.collection_exists.return_value = False
+
+    monkeypatch.setattr("retrieval.support.qdrant_config.create_qdrant_client", lambda **kw: mock_qdrant)
+
+    # 1. When collection does not exist, delete_chunks_for_paths skips deletion
+    delete_chunks_for_paths(["some/path.py"], collection_name="missing_col")
+    mock_qdrant.delete.assert_not_called()
+    mock_qdrant.collection_exists.assert_called_once_with(collection_name="missing_col")
+
+    # 2. When collection does not exist, delete_vectors_by_ids skips deletion
+    mock_qdrant.reset_mock()
+    mock_qdrant.collection_exists.return_value = False
+
+    delete_vectors_by_ids(["vec1", "vec2"], collection_name="missing_col")
+    mock_qdrant.delete.assert_not_called()
+    mock_qdrant.collection_exists.assert_called_once_with(collection_name="missing_col")
+
+    # 3. When collection DOES exist, delete is executed
+    mock_qdrant.reset_mock()
+    mock_qdrant.collection_exists.return_value = True
+
+    delete_vectors_by_ids(["vec1", "vec2"], collection_name="existing_col")
+    mock_qdrant.collection_exists.assert_called_once_with(collection_name="existing_col")
+    mock_qdrant.delete.assert_called_once()
 

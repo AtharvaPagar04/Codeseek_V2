@@ -78,6 +78,7 @@ def test_index_job_reuses_ready_session_for_same_commit(monkeypatch, tmp_path: P
     monkeypatch.setenv("CODESEEK_DB_PATH", str(tmp_path / "codeseek.sqlite3"))
     monkeypatch.setattr(session_indexer, "WORKSPACE_ROOT", tmp_path / "repos")
     monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda _url, _root, github_token="": "abc123")
+    monkeypatch.setattr("retrieval.session_indexer._embedding_config_status", lambda s: None)
     monkeypatch.setattr(session_indexer, "_collection_point_count", lambda _collection: 10)
     monkeypatch.setattr(
         session_indexer,
@@ -129,7 +130,7 @@ def test_delete_and_retry_helpers(monkeypatch, tmp_path: Path):
         def delete_collection(self, collection_name: str):
             deleted_collections.append(collection_name)
 
-    monkeypatch.setattr(session_indexer, "QdrantClient", FakeQdrantClient)
+    monkeypatch.setattr("retrieval.support.qdrant_config.create_qdrant_client", lambda **kw: FakeQdrantClient())
 
     session = session_indexer.create_session("octocat/hello-world", "local")
     assert queued == [session["id"]]
@@ -204,6 +205,7 @@ def test_index_job_invalidates_lexical_index_after_ingestion(monkeypatch, tmp_pa
     monkeypatch.setattr(session_indexer, "WORKSPACE_ROOT", tmp_path / "repos")
     monkeypatch.setattr(session_indexer, "_enqueue_index_job", lambda _session_id: None)
     monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda _url, _root, github_token="": "abc123")
+    monkeypatch.setattr("retrieval.session_indexer._embedding_config_status", lambda s: None)
     monkeypatch.setattr(session_indexer, "_collection_point_count", lambda _collection: 1)
     monkeypatch.setattr(
         session_indexer,
@@ -226,6 +228,7 @@ def test_index_job_exception_marks_session_failed_and_preserves_error(monkeypatc
     monkeypatch.setattr(session_indexer, "WORKSPACE_ROOT", tmp_path / "repos")
     monkeypatch.setattr(session_indexer, "_enqueue_index_job", lambda _session_id: None)
     monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda _url, _root, github_token="": "abc123")
+    monkeypatch.setattr("retrieval.session_indexer._embedding_config_status", lambda s: None)
     monkeypatch.setattr(session_indexer, "_collection_point_count", lambda _collection: 1)
     monkeypatch.setattr(
         session_indexer,

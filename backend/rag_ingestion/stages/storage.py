@@ -59,8 +59,13 @@ def delete_chunks_for_paths(
     collection = collection_name or COLLECTION_NAME
     from retrieval.support.qdrant_config import create_qdrant_client
     from qdrant_client.models import FieldCondition, Filter, MatchAny
+    import logging
 
     client = create_qdrant_client(check_compatibility=False)
+    if not client.collection_exists(collection_name=collection):
+        logging.getLogger(__name__).info(f"Skipping stale chunk deletion because collection {collection!r} does not exist yet.")
+        return
+
     client.delete(
         collection_name=collection,
         points_selector=Filter(
@@ -192,8 +197,13 @@ def delete_vectors_by_ids(
     collection = collection_name or COLLECTION_NAME
     from retrieval.support.qdrant_config import create_qdrant_client
     from qdrant_client.models import PointIdsList
+    import logging
 
     client = create_qdrant_client(check_compatibility=False)
+    if not client.collection_exists(collection_name=collection):
+        logging.getLogger(__name__).info(f"Skipping stale chunk deletion because collection {collection!r} does not exist yet.")
+        return
+
     client.delete(
         collection_name=collection,
         points_selector=PointIdsList(points=vector_ids),
