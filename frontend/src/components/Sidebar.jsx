@@ -1,3 +1,4 @@
+import React from 'react';
 import SessionItem from './SessionItem';
 
 export default function Sidebar({

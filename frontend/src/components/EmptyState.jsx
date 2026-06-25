@@ -1,3 +1,4 @@
+import React from 'react';
 /**
  * Shown in SessionView when there are no messages yet.
  */
