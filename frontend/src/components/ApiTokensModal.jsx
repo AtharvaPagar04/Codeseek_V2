@@ -479,7 +479,7 @@ export default function ApiTokensModal({ onClose }) {
             type="submit"
             form="provider-form"
             disabled={saving || testing}
-            className="px-4 py-2 bg-text-primary hover:bg-text-secondary text-surface-0 text-xs font-semibold font-mono tracking-wider rounded-lg transition-colors disabled:opacity-50"
+            className="px-4 py-2 bg-surface-2 hover:bg-surface-1 border border-border text-text-primary text-xs font-mono rounded-lg transition-colors disabled:opacity-50"
           >
             {saving ? 'Saving...' : 'Save'}
           </button>
