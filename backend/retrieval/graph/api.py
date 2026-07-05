@@ -1,4 +1,4 @@
-"""FastAPI route registration for Phase 1 repo graph endpoints."""
+"""FastAPI route registration for repo graph endpoints."""
 
 from __future__ import annotations
 

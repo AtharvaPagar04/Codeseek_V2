@@ -6,7 +6,12 @@ from dataclasses import dataclass, field
 
 
 STRUCTURAL_CONFIDENCE = "structural"
+EXACT_LOCAL_CONFIDENCE = "exact_local"
+EXTERNAL_PACKAGE_CONFIDENCE = "external_package"
+UNRESOLVED_RAW_CONFIDENCE = "unresolved_raw"
+WEAK_REFERENCE_CONFIDENCE = "weak_reference"
 PHASE1_EDGE_TYPES = {"contains", "defines"}
+PHASE2_IMPORT_EDGE_TYPES = {"imports", "unresolved_import"}
 PHASE1_SYMBOL_NODE_TYPES = {"class", "function", "method", "component"}
 
 
@@ -45,6 +50,8 @@ class GraphEdge:
 class GraphBuildResult:
     nodes_written: int = 0
     edges_written: int = 0
+    import_edges_written: int = 0
+    external_package_nodes: int = 0
     build_ms: int = 0
     cleanup_ms: int = 0
     unresolved_import_edges: int = 0
@@ -52,3 +59,14 @@ class GraphBuildResult:
     node_ids: set[str] = field(default_factory=set)
     edge_ids: set[str] = field(default_factory=set)
 
+
+@dataclass(frozen=True)
+class ImportReference:
+    raw_reference: str
+    normalized_reference: str
+    module_path: str
+    source_relative_path: str
+    source_start_line: int | None = None
+    imported_names: tuple[str, ...] = ()
+    language: str | None = None
+    syntax: str = ""

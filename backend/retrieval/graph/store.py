@@ -10,7 +10,7 @@ from retrieval.db import db_cursor
 from retrieval.graph.models import GraphBuildResult, GraphEdge, GraphNode
 from retrieval.support.path_utils import normalize_repo_path
 
-GRAPH_BUILD_VERSION = "phase1-hierarchy-v1"
+GRAPH_BUILD_VERSION = "phase2-imports-v1"
 
 
 def _now() -> str:
@@ -121,6 +121,7 @@ def upsert_graph_nodes(nodes: Iterable[GraphNode], cursor=None) -> int:
         "function": 4,
         "component": 5,
         "method": 6,
+        "external_package": 7,
     }
     node_list = sorted(list(nodes), key=lambda node: (node_order.get(node.node_type, 99), node.relative_path or "", node.name))
     if not node_list:
@@ -400,6 +401,20 @@ def count_graph_edges(session_id: str, cursor=None) -> int:
         return _run(cur)
 
 
+def count_graph_edges_by_type(session_id: str, edge_type: str, cursor=None) -> int:
+    def _run(cur):
+        row = cur.execute(
+            "SELECT COUNT(*) AS c FROM code_graph_edges WHERE session_id = ? AND edge_type = ?",
+            (session_id, edge_type),
+        ).fetchone()
+        return int(row["c"])
+
+    if cursor is not None:
+        return _run(cursor)
+    with db_cursor() as (_conn, cur):
+        return _run(cur)
+
+
 def get_graph_overview(
     session_id: str,
     *,
@@ -462,15 +477,45 @@ def get_file_graph(session_id: str, relative_path: str) -> dict:
         nodes = [_row_to_dict(row) for row in rows]
         file_node = next((node for node in nodes if node["node_type"] == "file"), None)
         node_ids = {node["id"] for node in nodes}
+        imports: list[dict] = []
+        imported_by: list[dict] = []
+        unresolved_imports: list[dict] = []
+        external_packages: list[dict] = []
         if node_ids:
             all_edges = list_graph_edges(session_id, cursor=cur)
             edges = [
                 edge for edge in all_edges
                 if edge["source_node_id"] in node_ids or edge["target_node_id"] in node_ids
             ]
+            related_node_ids = set(node_ids)
+            for edge in edges:
+                related_node_ids.add(edge["source_node_id"])
+                if edge["target_node_id"]:
+                    related_node_ids.add(edge["target_node_id"])
+            related_nodes = {}
+            for node_id in sorted(related_node_ids):
+                row = cur.execute(
+                    _node_select_sql() + " WHERE session_id = ? AND id = ?",
+                    (session_id, node_id),
+                ).fetchone()
+                if row:
+                    related_nodes[node_id] = _row_to_dict(row)
+
+            for edge in edges:
+                if edge["edge_type"] == "imports" and edge["source_node_id"] in node_ids:
+                    target = related_nodes.get(edge["target_node_id"])
+                    item = {**edge, "target": target}
+                    imports.append(item)
+                    if target and target.get("node_type") == "external_package":
+                        external_packages.append(target)
+                elif edge["edge_type"] == "unresolved_import" and edge["source_node_id"] in node_ids:
+                    unresolved_imports.append(edge)
+                elif edge["edge_type"] == "imports" and edge["target_node_id"] in node_ids:
+                    imported_by.append({**edge, "source": related_nodes.get(edge["source_node_id"])})
         else:
             edges = []
     symbols = [node for node in nodes if node["node_type"] not in {"file", "folder", "repo"}]
+    external_packages = list({node["id"]: node for node in external_packages}.values())
     return {
         "session_id": session_id,
         "status": status,
@@ -478,6 +523,10 @@ def get_file_graph(session_id: str, relative_path: str) -> dict:
         "file": file_node,
         "symbols": symbols,
         "edges": edges,
+        "imports": imports,
+        "imported_by": imported_by,
+        "unresolved_imports": unresolved_imports,
+        "external_packages": external_packages,
     }
 
 
