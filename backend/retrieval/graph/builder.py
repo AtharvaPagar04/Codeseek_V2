@@ -43,6 +43,10 @@ from retrieval.graph.store import (
 )
 
 
+JS_LOCAL_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json")
+JS_INDEX_NAMES = ("index.ts", "index.tsx", "index.js", "index.jsx")
+
+
 def rebuild_session_hierarchy_graph(session_id: str, chunks: list, *, cursor=None) -> GraphBuildResult:
     """Replace all hierarchy graph rows for a session from the provided chunks."""
     set_graph_build_status(session_id, "building", cursor=cursor)
@@ -520,6 +524,8 @@ def _resolve_local_import_path(reference: ImportReference, indexed_paths: set[st
     if reference.syntax in {"js_import", "js_require"}:
         if module_path.startswith(("./", "../")):
             return _resolve_js_relative_path(reference.source_relative_path, module_path, indexed_paths)
+        if _is_js_src_alias_path(module_path):
+            return _resolve_js_src_alias_path(reference, indexed_paths)
         return None
     return _resolve_python_path(reference, indexed_paths)
 
@@ -531,9 +537,65 @@ def _resolve_js_relative_path(source_relative_path: str, module_path: str, index
     return _first_indexed_path_candidate(
         base,
         indexed_paths,
-        extensions=(".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json"),
-        index_names=("index.ts", "index.tsx", "index.js", "index.jsx"),
+        extensions=JS_LOCAL_EXTENSIONS,
+        index_names=JS_INDEX_NAMES,
     )
+
+
+def _resolve_js_src_alias_path(reference: ImportReference, indexed_paths: set[str]) -> str | None:
+    for base in _js_src_alias_base_paths(reference.module_path):
+        direct = _first_indexed_path_candidate(
+            base,
+            indexed_paths,
+            extensions=JS_LOCAL_EXTENSIONS,
+            index_names=JS_INDEX_NAMES,
+        )
+        imported_file = None
+        if direct is None or _is_js_index_path(direct):
+            imported_file = _resolve_js_imported_name_file(base, reference.imported_names, indexed_paths)
+        if imported_file:
+            return imported_file
+        if direct:
+            return direct
+    return None
+
+
+def _js_src_alias_base_paths(module_path: str) -> list[str]:
+    if not _is_js_src_alias_path(module_path):
+        return []
+    suffix = module_path.strip()[2:].strip("/")
+    return [normalize_relative_path(posixpath.join("src", suffix))]
+
+
+def _resolve_js_imported_name_file(
+    base: str,
+    imported_names: tuple[str, ...],
+    indexed_paths: set[str],
+) -> str | None:
+    for imported_name in imported_names:
+        name = str(imported_name or "").strip()
+        if not name or name == "*" or not re.match(r"^[A-Za-z_$][A-Za-z0-9_$]*$", name):
+            continue
+        candidate_base = normalize_relative_path(posixpath.join(base, name))
+        resolved = _first_indexed_path_candidate(
+            candidate_base,
+            indexed_paths,
+            extensions=JS_LOCAL_EXTENSIONS,
+            index_names=JS_INDEX_NAMES,
+        )
+        if resolved:
+            return resolved
+    return None
+
+
+def _is_js_src_alias_path(module_path: str) -> bool:
+    return str(module_path or "").strip().startswith("@/")
+
+
+def _is_js_index_path(path: str | None) -> bool:
+    if not path:
+        return False
+    return PurePosixPath(path).name in JS_INDEX_NAMES
 
 
 def _resolve_python_path(reference: ImportReference, indexed_paths: set[str]) -> str | None:
@@ -621,6 +683,8 @@ def _external_package_name(reference: ImportReference) -> str:
     if not module_path or module_path.startswith((".", "./", "../")):
         return ""
     if reference.syntax in {"js_import", "js_require"}:
+        if _is_js_src_alias_path(module_path):
+            return ""
         if module_path.startswith("@"):
             parts = [part for part in module_path.split("/") if part]
             package_name = "/".join(parts[:2]) if len(parts) >= 2 else module_path

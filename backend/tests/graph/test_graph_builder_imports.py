@@ -139,6 +139,214 @@ def test_js_ts_relative_and_external_imports(
     )
 
 
+def test_js_ts_src_alias_resolves_to_local_file_not_external_package(
+    insert_session,
+    add_session_chunks,
+    make_chunk,
+):
+    session_id = insert_session()
+    chunks = [
+        make_chunk(
+            chunk_id="page-file",
+            relative_path="src/app/page.tsx",
+            chunk_type="file",
+            language="typescript",
+            imports=['import { data } from "@/lib/data";'],
+        ),
+        make_chunk(
+            chunk_id="data-file",
+            relative_path="src/lib/data.ts",
+            chunk_type="file",
+            language="typescript",
+        ),
+    ]
+    add_session_chunks(session_id, "src/app/page.tsx", ["page-file"])
+    add_session_chunks(session_id, "src/lib/data.ts", ["data-file"])
+
+    rebuild_session_hierarchy_graph(session_id, chunks)
+    nodes = _nodes_by_id(session_id)
+    edges = list_graph_edges(session_id)
+
+    assert any(
+        edge["edge_type"] == "imports"
+        and edge["source_node_id"] == file_node_id(session_id, "src/app/page.tsx")
+        and edge["target_node_id"] == file_node_id(session_id, "src/lib/data.ts")
+        and edge["confidence_tier"] == "exact_local"
+        for edge in edges
+    )
+    assert not any(
+        node["node_type"] == "external_package"
+        and str(node["name"]).startswith("@/")
+        for node in nodes.values()
+    )
+
+
+def test_js_ts_src_alias_resolves_to_component_file(
+    insert_session,
+    add_session_chunks,
+    make_chunk,
+):
+    session_id = insert_session()
+    chunks = [
+        make_chunk(
+            chunk_id="page-file",
+            relative_path="src/app/page.tsx",
+            chunk_type="file",
+            language="typescript",
+            imports=['import Hero from "@/components/Hero";'],
+        ),
+        make_chunk(
+            chunk_id="hero-file",
+            relative_path="src/components/Hero.tsx",
+            chunk_type="file",
+            language="typescript",
+        ),
+        make_chunk(
+            chunk_id="hero-component",
+            relative_path="src/components/Hero.tsx",
+            chunk_type="component",
+            symbol_name="Hero",
+            qualified_symbol="src/components/Hero.tsx::Hero",
+            language="typescript",
+        ),
+    ]
+    add_session_chunks(session_id, "src/app/page.tsx", ["page-file"])
+    add_session_chunks(session_id, "src/components/Hero.tsx", ["hero-file", "hero-component"])
+
+    rebuild_session_hierarchy_graph(session_id, chunks)
+    hero_id = symbol_node_id(
+        session_id,
+        "src/components/Hero.tsx",
+        "src/components/Hero.tsx::Hero",
+        "component",
+    )
+
+    assert any(
+        edge["edge_type"] == "imports"
+        and edge["source_node_id"] == file_node_id(session_id, "src/app/page.tsx")
+        and edge["target_node_id"] == hero_id
+        and edge["confidence_tier"] == "exact_local"
+        for edge in list_graph_edges(session_id)
+    )
+
+
+def test_js_ts_src_alias_barrel_prefers_imported_component_file(
+    insert_session,
+    add_session_chunks,
+    make_chunk,
+):
+    session_id = insert_session()
+    chunks = [
+        make_chunk(
+            chunk_id="page-file",
+            relative_path="src/app/page.tsx",
+            chunk_type="file",
+            language="typescript",
+            imports=['import { Projects } from "@/components";'],
+        ),
+        make_chunk(
+            chunk_id="index-file",
+            relative_path="src/components/index.ts",
+            chunk_type="file",
+            language="typescript",
+        ),
+        make_chunk(
+            chunk_id="projects-file",
+            relative_path="src/components/Projects.tsx",
+            chunk_type="file",
+            language="typescript",
+        ),
+        make_chunk(
+            chunk_id="projects-component",
+            relative_path="src/components/Projects.tsx",
+            chunk_type="component",
+            symbol_name="Projects",
+            qualified_symbol="src/components/Projects.tsx::Projects",
+            language="typescript",
+        ),
+    ]
+    add_session_chunks(session_id, "src/app/page.tsx", ["page-file"])
+    add_session_chunks(session_id, "src/components/index.ts", ["index-file"])
+    add_session_chunks(session_id, "src/components/Projects.tsx", ["projects-file", "projects-component"])
+
+    rebuild_session_hierarchy_graph(session_id, chunks)
+    projects_id = symbol_node_id(
+        session_id,
+        "src/components/Projects.tsx",
+        "src/components/Projects.tsx::Projects",
+        "component",
+    )
+
+    assert any(
+        edge["edge_type"] == "imports"
+        and edge["source_node_id"] == file_node_id(session_id, "src/app/page.tsx")
+        and edge["target_node_id"] == projects_id
+        and edge["confidence_tier"] == "exact_local"
+        for edge in list_graph_edges(session_id)
+    )
+
+
+def test_js_ts_unresolved_src_alias_does_not_create_external_package(
+    insert_session,
+    add_session_chunks,
+    make_chunk,
+):
+    session_id = insert_session()
+    chunks = [
+        make_chunk(
+            chunk_id="page-file",
+            relative_path="src/app/page.tsx",
+            chunk_type="file",
+            language="typescript",
+            imports=['import X from "@/missing/X";'],
+        ),
+    ]
+    add_session_chunks(session_id, "src/app/page.tsx", ["page-file"])
+
+    rebuild_session_hierarchy_graph(session_id, chunks)
+    nodes = _nodes_by_id(session_id)
+    edges = list_graph_edges(session_id)
+
+    unresolved = [edge for edge in edges if edge["edge_type"] == "unresolved_import"]
+    assert len(unresolved) == 1
+    assert unresolved[0]["target_node_id"] is None
+    assert unresolved[0]["raw_reference"] == 'import X from "@/missing/X";'
+    assert not any(
+        node["node_type"] == "external_package"
+        and str(node["name"]).startswith("@/")
+        for node in nodes.values()
+    )
+
+
+def test_js_ts_real_external_package_still_creates_external_package_node(
+    insert_session,
+    add_session_chunks,
+    make_chunk,
+):
+    session_id = insert_session()
+    chunks = [
+        make_chunk(
+            chunk_id="page-file",
+            relative_path="src/app/page.tsx",
+            chunk_type="file",
+            language="typescript",
+            imports=['import React from "react";'],
+        ),
+    ]
+    add_session_chunks(session_id, "src/app/page.tsx", ["page-file"])
+
+    rebuild_session_hierarchy_graph(session_id, chunks)
+    react_id = external_package_node_id(session_id, "react")
+
+    assert react_id in _nodes_by_id(session_id)
+    assert any(
+        edge["edge_type"] == "imports"
+        and edge["target_node_id"] == react_id
+        and edge["confidence_tier"] == "external_package"
+        for edge in list_graph_edges(session_id)
+    )
+
+
 def test_import_cleanup_refreshes_changed_file_and_removes_dangling_target_edges(
     insert_session,
     add_session_chunks,

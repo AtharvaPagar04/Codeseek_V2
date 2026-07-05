@@ -65,6 +65,51 @@ def test_shadow_import_expansion_includes_import_target(insert_session, add_sess
     assert result["overlap"]["new_files_added"] == ["utils/helpers.py"]
 
 
+def test_shadow_import_expansion_includes_src_alias_barrel_component(
+    insert_session,
+    add_session_chunks,
+    make_chunk,
+):
+    session_id = insert_session()
+    chunks = [
+        make_chunk(
+            chunk_id="page-file",
+            relative_path="src/app/page.tsx",
+            chunk_type="file",
+            language="typescript",
+            imports=['import { Projects } from "@/components";'],
+        ),
+        make_chunk(
+            chunk_id="projects-file",
+            relative_path="src/components/Projects.tsx",
+            chunk_type="file",
+            language="typescript",
+        ),
+        make_chunk(
+            chunk_id="projects-component",
+            relative_path="src/components/Projects.tsx",
+            chunk_type="component",
+            symbol_name="Projects",
+            qualified_symbol="src/components/Projects.tsx::Projects",
+            language="typescript",
+        ),
+    ]
+    add_session_chunks(session_id, "src/app/page.tsx", ["page-file"])
+    add_session_chunks(session_id, "src/components/Projects.tsx", ["projects-file", "projects-component"])
+    rebuild_session_hierarchy_graph(session_id, chunks)
+
+    result = run_graph_shadow_retrieval(
+        session_id,
+        [{"chunk_id": "page-file", "relative_path": "src/app/page.tsx"}],
+        enabled=True,
+    )
+
+    assert result["status"] == "ready"
+    assert any(item["relative_path"] == "src/components/Projects.tsx" for item in result["expanded_nodes"])
+    assert any(item["chunk_id"] == "projects-component" for item in result["candidate_chunks"])
+    assert not result["external_packages"]
+
+
 def test_shadow_imported_by_expansion_includes_importing_file(insert_session, add_session_chunks, make_chunk):
     session_id = insert_session()
     chunks = [
