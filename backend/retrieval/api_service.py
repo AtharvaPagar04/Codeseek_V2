@@ -748,6 +748,7 @@ def _build_query_diagnostics(
     memory_diagnostics = meta.get("memory_diagnostics") if isinstance(meta.get("memory_diagnostics"), dict) else {}
     retrieval_targeting = meta.get("retrieval_targeting") if isinstance(meta.get("retrieval_targeting"), dict) else {}
     source_alignment = meta.get("source_alignment") if isinstance(meta.get("source_alignment"), dict) else {}
+    graph_shadow = meta.get("graph_shadow") if isinstance(meta.get("graph_shadow"), dict) else {}
 
     def _compact_sources(items: list[dict]) -> list[dict]:
         compacted: list[dict] = []
@@ -783,6 +784,9 @@ def _build_query_diagnostics(
         diagnostics["memory"] = dict(memory_diagnostics.get("memory") or {})
         diagnostics["rewrite"] = dict(memory_diagnostics.get("rewrite") or {})
         diagnostics["retrieval"] = dict(memory_diagnostics.get("retrieval") or {})
+
+    if graph_shadow:
+        diagnostics["graph_shadow"] = graph_shadow
 
     validation = meta.get("validation")
     if isinstance(validation, dict):
@@ -908,6 +912,7 @@ def _query_impl(
                 request_id=request_id,
                 return_meta=True,
                 provider_config=provider_config,
+                session_id=session["id"] if session else None,
             )
         if session:
             diagnostics_data = None
@@ -1182,6 +1187,7 @@ async def query_stream_v1(
                     request_id=request_id,
                     return_meta=True,
                     provider_config=provider_config,
+                    session_id=session["id"] if session else None,
                     stream_handler=QueueStreamHandler(),
                     abort_event=abort_event,
                 )

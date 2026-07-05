@@ -32,6 +32,14 @@ def _env_bool(name: str, default: bool) -> bool:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
+
+def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    items = tuple(item.strip() for item in value.split(",") if item.strip())
+    return items or default
+
 COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "repository_chunks")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = _env_int("QDRANT_PORT", 6333)
@@ -52,6 +60,16 @@ ENABLE_SCORED_INTENT = _env_bool("RETRIEVAL_ENABLE_SCORED_INTENT", True)
 # Two-layer source gating: display_sources (strict, cited) vs reasoning_sources (broader, synthesis-only).
 # Disable to fall back to single-list behaviour where all assembled sources are both cited and reasoned from.
 ENABLE_TWO_LAYER_SOURCES = _env_bool("RETRIEVAL_ENABLE_TWO_LAYER_SOURCES", True)
+
+
+def get_graph_shadow_config() -> dict[str, object]:
+    """Read graph shadow retrieval settings at runtime for test and API toggles."""
+    return {
+        "enabled": _env_bool("CODESEEK_GRAPH_RETRIEVAL_SHADOW", False),
+        "max_anchors": _env_positive_int("CODESEEK_GRAPH_SHADOW_MAX_ANCHORS", 5),
+        "max_expanded": _env_positive_int("CODESEEK_GRAPH_SHADOW_MAX_EXPANDED", 20),
+        "edge_types": _env_csv("CODESEEK_GRAPH_SHADOW_EDGE_TYPES", ("imports", "defines", "contains")),
+    }
 
 # Display and reasoning source caps (plan §Source Set Size Decision).
 DISPLAY_SOURCES_CAP = _env_int("RETRIEVAL_DISPLAY_SOURCES_CAP", 6)

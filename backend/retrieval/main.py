@@ -1045,6 +1045,7 @@ def run_query(
     request_id: str | None = None,
     return_meta: bool = False,
     provider_config: dict | None = None,
+    session_id: str | None = None,
     capture_eval: bool = False,
     stream_handler: Any | None = None,
     abort_event: Any | None = None,
@@ -1056,6 +1057,7 @@ def run_query(
         request_id=request_id,
         return_meta=return_meta,
         provider_config=provider_config,
+        session_id=session_id,
         capture_eval=capture_eval,
         stream_handler=stream_handler,
         abort_event=abort_event,
@@ -1079,6 +1081,7 @@ def _run_query_impl(
     request_id: str | None = None,
     return_meta: bool = False,
     provider_config: dict | None = None,
+    session_id: str | None = None,
     capture_eval: bool = False,
     stream_handler: Any | None = None,
     abort_event: Any | None = None,
@@ -1138,6 +1141,43 @@ def _run_query_impl(
     started = time.perf_counter()
     candidates = search(query_info)
     metrics.add_stage("search", started)
+
+    started = time.perf_counter()
+    try:
+        from retrieval.graph.retrieval import run_graph_shadow_retrieval
+
+        graph_shadow = run_graph_shadow_retrieval(session_id, candidates)
+        if graph_shadow.get("enabled") or graph_shadow.get("status") != "disabled":
+            meta["graph_shadow"] = graph_shadow
+            log_event(
+                "retrieval.graph_shadow",
+                rid,
+                status=graph_shadow.get("status"),
+                anchors=graph_shadow.get("stats", {}).get("anchors_count", 0),
+                expanded=graph_shadow.get("stats", {}).get("expanded_nodes_count", 0),
+                candidate_chunks=graph_shadow.get("stats", {}).get("candidate_chunks_count", 0),
+            )
+    except Exception as exc:
+        meta["graph_shadow"] = {
+            "enabled": True,
+            "status": "error",
+            "error": str(exc),
+            "anchors": [],
+            "expanded_nodes": [],
+            "candidate_chunks": [],
+            "unresolved_imports": [],
+            "external_packages": [],
+            "stats": {
+                "anchors_count": 0,
+                "expanded_nodes_count": 0,
+                "candidate_chunks_count": 0,
+                "edge_types_used": [],
+                "external_package_count": 0,
+                "unresolved_import_count": 0,
+            },
+        }
+    if meta.get("graph_shadow", {}).get("enabled"):
+        metrics.add_stage("graph_shadow", started)
     
     # Phase 1: Capture top 20 raw candidates
     top_raw = []
