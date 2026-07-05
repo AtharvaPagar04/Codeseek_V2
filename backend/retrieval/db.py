@@ -223,6 +223,57 @@ CREATE TABLE IF NOT EXISTS session_file_chunks (
     FOREIGN KEY(session_file_id) REFERENCES session_files(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS code_graph_builds (
+    session_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    build_version TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL DEFAULT '',
+    finished_at TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    graph_nodes_written INTEGER NOT NULL DEFAULT 0,
+    graph_edges_written INTEGER NOT NULL DEFAULT 0,
+    graph_build_ms INTEGER NOT NULL DEFAULT 0,
+    graph_cleanup_ms INTEGER NOT NULL DEFAULT 0,
+    unresolved_import_edges INTEGER NOT NULL DEFAULT 0,
+    unresolved_call_edges INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS code_graph_nodes (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    node_type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    qualified_name TEXT,
+    relative_path TEXT,
+    language TEXT,
+    start_line INTEGER,
+    end_line INTEGER,
+    parent_node_id TEXT,
+    chunk_id TEXT,
+    content_hash TEXT,
+    metadata_json TEXT,
+    created_at TEXT,
+    updated_at TEXT,
+    FOREIGN KEY(parent_node_id) REFERENCES code_graph_nodes(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS code_graph_edges (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    source_node_id TEXT NOT NULL,
+    target_node_id TEXT NULL,
+    edge_type TEXT NOT NULL,
+    confidence_tier TEXT,
+    raw_reference TEXT,
+    evidence_json TEXT,
+    source_relative_path TEXT,
+    source_start_line INTEGER,
+    created_at TEXT,
+    FOREIGN KEY(source_node_id) REFERENCES code_graph_nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY(target_node_id) REFERENCES code_graph_nodes(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS indexing_jobs (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -242,6 +293,14 @@ CREATE TABLE IF NOT EXISTS indexing_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_session_files_session_path ON session_files(session_id, repo_path);
 CREATE INDEX IF NOT EXISTS idx_session_file_chunks_file ON session_file_chunks(session_file_id);
+CREATE INDEX IF NOT EXISTS idx_code_graph_nodes_session_type ON code_graph_nodes(session_id, node_type);
+CREATE INDEX IF NOT EXISTS idx_code_graph_nodes_session_path ON code_graph_nodes(session_id, relative_path);
+CREATE INDEX IF NOT EXISTS idx_code_graph_nodes_session_qualified ON code_graph_nodes(session_id, qualified_name);
+CREATE INDEX IF NOT EXISTS idx_code_graph_nodes_session_chunk ON code_graph_nodes(session_id, chunk_id);
+CREATE INDEX IF NOT EXISTS idx_code_graph_edges_session_type ON code_graph_edges(session_id, edge_type);
+CREATE INDEX IF NOT EXISTS idx_code_graph_edges_session_source ON code_graph_edges(session_id, source_node_id);
+CREATE INDEX IF NOT EXISTS idx_code_graph_edges_session_target ON code_graph_edges(session_id, target_node_id);
+CREATE INDEX IF NOT EXISTS idx_code_graph_edges_session_source_path ON code_graph_edges(session_id, source_relative_path);
 CREATE INDEX IF NOT EXISTS idx_indexing_jobs_session_started ON indexing_jobs(session_id, started_at);
 """
 

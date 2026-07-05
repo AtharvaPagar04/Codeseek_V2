@@ -345,6 +345,35 @@ def run_pipeline(
                 logger.error("Failed to record passive incremental metadata: %s", e)
                 raise RuntimeError(f"Metadata recording failed: {e}") from e
 
+            try:
+                from retrieval.graph.builder import (
+                    rebuild_session_hierarchy_graph,
+                    replace_paths_hierarchy_graph,
+                )
+                from retrieval.graph.store import set_graph_build_status
+
+                full_graph_rebuild = (
+                    should_recreate_collection
+                    or not use_incremental_skip
+                    or not previous_state
+                )
+                if full_graph_rebuild:
+                    graph_result = rebuild_session_hierarchy_graph(session_id, embedded_chunks)
+                else:
+                    graph_result = replace_paths_hierarchy_graph(session_id, embedded_chunks)
+                counters.graph_nodes_written = graph_result.nodes_written
+                counters.graph_edges_written = graph_result.edges_written
+                counters.graph_build_ms = graph_result.build_ms
+                counters.graph_cleanup_ms = graph_result.cleanup_ms
+                counters.unresolved_import_edges = graph_result.unresolved_import_edges
+                counters.unresolved_call_edges = graph_result.unresolved_call_edges
+            except Exception as e:
+                logger.error("Failed to build repo hierarchy graph: %s", e)
+                try:
+                    set_graph_build_status(session_id, "failed", error=str(e))
+                except Exception:
+                    logger.exception("Failed to mark repo hierarchy graph as failed")
+
         # --- Final cleanup: unload models and free VRAM ---
         if UNLOAD_EMBEDDING_MODEL_AFTER_INDEXING:
             unload_embedding_model()
@@ -362,6 +391,18 @@ def run_pipeline(
             if removed_paths:
                 emit("storage", f"Deleting chunks for {len(removed_paths)} removed file(s)…")
                 delete_chunks_for_paths(removed_paths, collection_name=selected_collection)
+                if session_id:
+                    try:
+                        from retrieval.graph.builder import cleanup_deleted_paths
+                        graph_result = cleanup_deleted_paths(session_id, removed_paths)
+                        counters.graph_cleanup_ms += graph_result.cleanup_ms
+                    except Exception as e:
+                        logger.error("Failed to clean repo graph for removed files: %s", e)
+                        try:
+                            from retrieval.graph.store import set_graph_build_status
+                            set_graph_build_status(session_id, "failed", error=str(e))
+                        except Exception:
+                            logger.exception("Failed to mark repo hierarchy graph as failed")
                 emit("storage",
                      f"Deleted chunks for {len(removed_paths)} removed file(s).",
                      level="success")
@@ -654,6 +695,28 @@ def run_incremental_pipeline(
 
                 if deleted_files:
                     mark_session_files_deleted(session_id, deleted_files, cursor=cursor)
+
+            try:
+                from retrieval.graph.builder import replace_paths_hierarchy_graph
+                from retrieval.graph.store import set_graph_build_status
+
+                graph_result = replace_paths_hierarchy_graph(
+                    session_id,
+                    embedded_chunks if all_chunks else [],
+                    deleted_paths=deleted_files or [],
+                )
+                counters.graph_nodes_written = graph_result.nodes_written
+                counters.graph_edges_written = graph_result.edges_written
+                counters.graph_build_ms = graph_result.build_ms
+                counters.graph_cleanup_ms = graph_result.cleanup_ms
+                counters.unresolved_import_edges = graph_result.unresolved_import_edges
+                counters.unresolved_call_edges = graph_result.unresolved_call_edges
+            except Exception as e:
+                logger.error("Failed to update repo hierarchy graph: %s", e)
+                try:
+                    set_graph_build_status(session_id, "failed", error=str(e))
+                except Exception:
+                    logger.exception("Failed to mark repo hierarchy graph as failed")
 
         except Exception as e:
             logger.error("Failed to record incremental reindex metadata: %s", e)

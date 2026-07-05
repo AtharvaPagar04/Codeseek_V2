@@ -2405,4 +2405,14 @@ def query(
     return _query_impl(body, request, authorization, x_request_id, session_token)
 
 
+from retrieval.graph.api import register_graph_routes
+
+register_graph_routes(
+    v1,
+    require_auth_user=_require_auth_user,
+    get_session=get_session,
+    session_visible_to_user=_session_visible_to_user,
+    auth_cookie_name=AUTH_SESSION_COOKIE,
+)
+
 app.include_router(v1)
