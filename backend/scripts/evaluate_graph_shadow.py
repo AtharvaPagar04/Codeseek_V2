@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from contextlib import contextmanager
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,31 @@ if str(BACKEND_ROOT) not in sys.path:
 
 
 QueryRunner = Callable[[str, str, int], dict]
+
+
+@dataclass(frozen=True)
+class EvaluationSession:
+    session_id: str
+    repo_root: str
+    collection: str
+    session_status: str
+    graph_status: str | None
+    graph_error: str = ""
+    collection_points: int = 0
+
+
+class EvaluationSessionValidationError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        session_status: str | None = None,
+        graph_status: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.session_status = session_status
+        self.graph_status = graph_status
 
 
 def load_query_cases(path: Path) -> list[dict]:
@@ -51,7 +77,16 @@ def evaluate_cases(
     top_k: int = 10,
     max_queries: int | None = None,
     runner: QueryRunner | None = None,
+    allow_missing_graph: bool = False,
+    validate_session: bool | None = None,
 ) -> dict:
+    should_validate = (runner is None) if validate_session is None else validate_session
+    if should_validate:
+        try:
+            load_evaluation_session(session_id, allow_missing_graph=allow_missing_graph)
+        except EvaluationSessionValidationError as exc:
+            return build_session_error_report(session_id, top_k=top_k, error=exc)
+
     selected_cases = cases[: max_queries or len(cases)]
     runner = runner or run_retrieval_shadow_query
     results: list[dict] = []
@@ -75,12 +110,12 @@ def evaluate_cases(
 
 def run_retrieval_shadow_query(session_id: str, query: str, top_k: int) -> dict:
     """Run retrieval and graph shadow expansion without generating an answer."""
-    session = _load_session(session_id)
+    session = load_evaluation_session(session_id, allow_missing_graph=True)
     previous_repo_root = os.getenv("RETRIEVAL_REPO_ROOT", "")
     previous_collection = os.getenv("QDRANT_COLLECTION_NAME", "")
     try:
-        os.environ["RETRIEVAL_REPO_ROOT"] = session.get("repo_root", "")
-        os.environ["QDRANT_COLLECTION_NAME"] = session.get("collection", "")
+        os.environ["RETRIEVAL_REPO_ROOT"] = session.repo_root
+        os.environ["QDRANT_COLLECTION_NAME"] = session.collection
 
         from retrieval.query.query_processor import process_query
         from retrieval.search.searcher import search
@@ -104,6 +139,7 @@ def build_query_result(case: dict, query_result: dict, *, top_k: int = 10) -> di
     candidate_chunks = list(graph_shadow.get("candidate_chunks") or [])
     external_packages = list(graph_shadow.get("external_packages") or [])
     unresolved_imports = list(graph_shadow.get("unresolved_imports") or [])
+    graph_status = str(graph_shadow.get("status") or "").strip()
 
     normal_top_files = _unique_paths(item.get("relative_path") for item in normal_candidates)
     normal_top_symbols = _unique_strings(item.get("symbol_name") for item in normal_candidates if item.get("symbol_name"))
@@ -123,19 +159,22 @@ def build_query_result(case: dict, query_result: dict, *, top_k: int = 10) -> di
         if _norm(symbol) not in {_norm(item) for item in expected_symbol_hit_normal}
     ]
 
-    classification = classify_query_result(
-        graph_candidate_count=len(candidate_chunks),
-        graph_added_expected_file=bool(graph_added_expected_file),
-        graph_added_expected_symbol=bool(graph_added_expected_symbol),
-        graph_new_files=graph_new_files,
-        unresolved_import_count=len(unresolved_imports),
-    )
+    if graph_status and graph_status != "ready" and not candidate_chunks:
+        classification = "no_graph_available"
+    else:
+        classification = classify_query_result(
+            graph_candidate_count=len(candidate_chunks),
+            graph_added_expected_file=bool(graph_added_expected_file),
+            graph_added_expected_symbol=bool(graph_added_expected_symbol),
+            graph_new_files=graph_new_files,
+            unresolved_import_count=len(unresolved_imports),
+        )
 
     return {
         "id": case.get("id", ""),
         "query": case["query"],
         "notes": case.get("notes", ""),
-        "status": graph_shadow.get("status", ""),
+        "status": graph_status,
         "classification": classification,
         "normal_top_candidates": [compact_candidate(item) for item in normal_candidates],
         "normal_top_files": normal_top_files,
@@ -209,6 +248,26 @@ def build_query_error_result(case: dict, error: str, *, top_k: int = 10) -> dict
     }
 
 
+def build_session_error_report(
+    session_id: str,
+    *,
+    top_k: int,
+    error: EvaluationSessionValidationError,
+) -> dict:
+    return {
+        "session_id": session_id,
+        "top_k": top_k,
+        "summary": _empty_summary(),
+        "session_error": {
+            "status": "failed_validation",
+            "message": error.message,
+            "session_status": error.session_status,
+            "graph_status": error.graph_status,
+        },
+        "results": [],
+    }
+
+
 def build_summary(results: list[dict]) -> dict:
     total_queries = len(results)
     graph_candidate_counts = [int(item.get("graph_candidate_count", 0) or 0) for item in results]
@@ -240,6 +299,21 @@ def build_summary(results: list[dict]) -> dict:
             for raw_reference, count in unresolved_imports.most_common(10)
         ],
         "classification_counts": dict(classifications),
+    }
+
+
+def _empty_summary() -> dict:
+    return {
+        "total_queries": 0,
+        "queries_with_graph_candidates": 0,
+        "queries_where_graph_added_expected_file": 0,
+        "queries_where_graph_added_expected_symbol": 0,
+        "queries_where_graph_added_new_file": 0,
+        "average_graph_candidate_count": 0.0,
+        "average_unresolved_import_count": 0.0,
+        "top_added_files": [],
+        "top_unresolved_imports": [],
+        "classification_counts": {},
     }
 
 
@@ -291,6 +365,9 @@ def compact_candidate(item: dict) -> dict:
 
 
 def render_markdown_report(report: dict) -> str:
+    if report.get("session_error"):
+        return _render_session_error_markdown(report)
+
     summary = report.get("summary", {})
     lines = [
         "# Graph Shadow Evaluation Report",
@@ -330,6 +407,21 @@ def render_markdown_report(report: dict) -> str:
     return "\n".join(lines)
 
 
+def _render_session_error_markdown(report: dict) -> str:
+    session_error = report.get("session_error", {})
+    lines = [
+        "# Graph Shadow Evaluation Report",
+        "",
+        "## Session Error",
+        f"- Session: {report.get('session_id', '')}",
+        f"- Error: {session_error.get('message', '')}",
+        f"- Session status: {session_error.get('session_status') or 'none'}",
+        f"- Graph status: {session_error.get('graph_status') or 'none'}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def write_json_report(report: dict, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
@@ -338,6 +430,87 @@ def write_json_report(report: dict, output_path: Path) -> None:
 def write_markdown_report(report: dict, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(render_markdown_report(report), encoding="utf-8")
+
+
+def load_evaluation_session(
+    session_id: str,
+    *,
+    allow_missing_graph: bool = False,
+    collection_point_count: Callable[[str], int] | None = None,
+) -> EvaluationSession:
+    session = _load_session(session_id)
+    if not session:
+        raise EvaluationSessionValidationError(f"Session not found: {session_id}")
+
+    session_status = str(session.get("status") or "").strip()
+    if session_status != "ready":
+        raise EvaluationSessionValidationError(
+            f"Session is not ready: {session_status or 'unknown'}",
+            session_status=session_status or None,
+        )
+
+    repo_root = str(session.get("repo_root") or "").strip()
+    if not repo_root:
+        raise EvaluationSessionValidationError(
+            "Session has no repo_root",
+            session_status=session_status,
+        )
+    if not Path(repo_root).exists():
+        raise EvaluationSessionValidationError(
+            f"Session repo_root does not exist: {repo_root}",
+            session_status=session_status,
+        )
+
+    collection = str(session.get("collection") or "").strip()
+    if not collection:
+        raise EvaluationSessionValidationError(
+            "Session has no collection",
+            session_status=session_status,
+        )
+
+    point_counter = collection_point_count or _collection_point_count
+    collection_points = point_counter(collection)
+    if collection_points <= 0:
+        raise EvaluationSessionValidationError(
+            f"Session collection is empty or unavailable: {collection}",
+            session_status=session_status,
+        )
+
+    graph_status_row = _load_graph_status(session_id)
+    graph_status = str(graph_status_row.get("status") or "not_built").strip() or "not_built"
+    graph_error = str(graph_status_row.get("error") or "").strip()
+    if graph_status == "not_built":
+        if not allow_missing_graph:
+            raise EvaluationSessionValidationError(
+                "Graph is not built for this session",
+                session_status=session_status,
+                graph_status=graph_status,
+            )
+    elif graph_status == "failed":
+        message = "Graph build failed for this session"
+        if graph_error:
+            message = f"{message}: {graph_error}"
+        raise EvaluationSessionValidationError(
+            message,
+            session_status=session_status,
+            graph_status=graph_status,
+        )
+    elif graph_status != "ready":
+        raise EvaluationSessionValidationError(
+            f"Graph is not ready for this session: {graph_status}",
+            session_status=session_status,
+            graph_status=graph_status,
+        )
+
+    return EvaluationSession(
+        session_id=session_id,
+        repo_root=repo_root,
+        collection=collection,
+        session_status=session_status,
+        graph_status=graph_status,
+        graph_error=graph_error,
+        collection_points=collection_points,
+    )
 
 
 def _load_session(session_id: str) -> dict:
@@ -352,9 +525,47 @@ def _load_session(session_id: str) -> dict:
             """,
             (session_id,),
         ).fetchone()
-        if not row:
-            raise ValueError(f"Session not found: {session_id}")
-        return dict(row)
+        return dict(row) if row else {}
+
+
+def _load_graph_status(session_id: str) -> dict:
+    from retrieval.db import db_cursor
+
+    with db_cursor() as (_conn, cursor):
+        row = cursor.execute(
+            """
+            SELECT session_id, status, error
+            FROM code_graph_builds
+            WHERE session_id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+        if row:
+            return dict(row)
+        return {
+            "session_id": session_id,
+            "status": "not_built",
+            "error": "",
+        }
+
+
+def _collection_point_count(collection: str) -> int:
+    try:
+        from retrieval.support.qdrant_config import create_qdrant_client
+
+        client = create_qdrant_client(timeout=5.0, check_compatibility=False)
+        info = client.get_collection(collection)
+    except Exception:
+        return 0
+
+    for field in ("points_count", "vectors_count", "indexed_vectors_count"):
+        value = getattr(info, field, None)
+        if value:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+    return 0
 
 
 @contextmanager
@@ -451,6 +662,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-md", type=Path, default=None, help="Optional Markdown report output path.")
     parser.add_argument("--top-k", type=int, default=10, help="Normal retrieval top-k candidates to compare.")
     parser.add_argument("--max-queries", type=int, default=None, help="Optional maximum number of queries.")
+    parser.add_argument(
+        "--allow-missing-graph",
+        action="store_true",
+        help="Continue when the graph has not been built; query results will report no graph availability.",
+    )
     parser.add_argument("--api-base", default=None, help="Reserved for API-based evaluation; currently unused.")
     parser.add_argument("--api-key", default=None, help="Reserved for API-based evaluation; currently unused.")
     return parser.parse_args()
@@ -467,6 +683,7 @@ def main() -> None:
         session_id=args.session_id,
         top_k=max(1, int(args.top_k or 10)),
         max_queries=args.max_queries,
+        allow_missing_graph=args.allow_missing_graph,
     )
 
     if args.output_json:
@@ -475,6 +692,8 @@ def main() -> None:
         write_markdown_report(report, args.output_md)
     if not args.output_json and not args.output_md:
         print(json.dumps(report, indent=2, sort_keys=True))
+    if report.get("session_error"):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

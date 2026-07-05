@@ -3153,6 +3153,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
     followup_hint_entities = query_info.get("followup_hint_entities") if query_info else None
     hint_files = list((followup_hint_entities or {}).get("files", []) or [])
     hint_symbols = list((followup_hint_entities or {}).get("symbols", []) or [])
+    collection = get_collection_name()
     matched_code_topic_route = (
         query_info.get("code_topic_route") if query_info else None
     ) or match_code_topic_route(raw_query, primary_intent)
@@ -3551,7 +3552,6 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
 
         dyn_boost = 0.0
         dyn_penalty = 0.0
-        collection = get_collection_name()
         if collection:
             from retrieval.support.repo_profile import compute_dynamic_boosts_and_penalties
             dyn_boost, dyn_penalty, dyn_meta = compute_dynamic_boosts_and_penalties(
