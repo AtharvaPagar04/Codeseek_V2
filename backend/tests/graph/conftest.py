@@ -22,6 +22,9 @@ def _now() -> str:
 @pytest.fixture
 def graph_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     db_path = tmp_path / "codeseek.sqlite3"
+    for path in (db_path, db_path.with_name(db_path.name + "-wal"), db_path.with_name(db_path.name + "-shm")):
+        path.unlink(missing_ok=True)
+    monkeypatch.setenv("CODESEEK_SQLITE_PATH", str(db_path))
     monkeypatch.setenv("CODESEEK_DB_PATH", str(db_path))
     monkeypatch.setenv("CODESEEK_DATABASE_URL", "")
     monkeypatch.setenv("CODESEEK_DB_BACKEND", "sqlite")

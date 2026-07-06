@@ -1,5 +1,9 @@
-from retrieval.db import db_cursor
+from retrieval.db import db_cursor, get_db_path
 from retrieval.graph.ids import file_node_id, graph_edge_id, repo_node_id
+
+
+def test_graph_db_fixture_uses_isolated_sqlite_path(graph_db):
+    assert get_db_path() == graph_db.resolve()
 
 
 def test_graph_schema_tables_and_indexes_exist(graph_db):
