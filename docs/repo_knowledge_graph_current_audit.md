@@ -4,6 +4,116 @@ This document is the canonical implementation plan for adding a Repo Knowledge G
 
 The graph must be built as a sidecar to the existing RAG system. Existing chunking, Qdrant vector retrieval, source assembly, diagnostics, and answer generation remain the primary answer pipeline. The graph adds structured repository relationships that link back to current chunk IDs.
 
+## Current Implementation Snapshot
+
+This branch now includes the graph sidecar foundation, import graph, shadow retrieval diagnostics, shadow evaluation tooling, tuned graph-shadow precision, active graph retrieval behind feature flags, source-card/source-alignment cleanup, and isolated graph test fixtures.
+
+### Graph Retrieval Modes
+
+- The repo graph is built during indexing as a sidecar over existing session, file, and chunk metadata.
+- Graph storage does not replace chunking, embeddings, Qdrant, hybrid retrieval, reranking, context assembly, or answer generation.
+- Normal retrieval remains the baseline path: chunks -> embeddings -> Qdrant/hybrid search -> context assembly -> answer generation.
+- Graph shadow mode runs graph expansion after normal retrieval and records diagnostics only. It does not change final candidates, ranking, source cards, context, or answers.
+- Graph active mode optionally injects a small number of tuned graph candidates into live retrieval. It is disabled by default and requires graph shadow mode to be enabled.
+
+### Feature Flags And Defaults
+
+| Flag | Default | Purpose |
+|---|---:|---|
+| `CODESEEK_GRAPH_RETRIEVAL_SHADOW` | `false` | Enables graph shadow diagnostics and candidate analysis. Active graph retrieval requires this to be `true`. |
+| `CODESEEK_GRAPH_RETRIEVAL_ACTIVE` | `false` | Enables active graph candidate injection. This must remain false by default for production safety. |
+| `CODESEEK_GRAPH_ACTIVE_MAX_ADDED` | `2` | Maximum graph-active candidates injected into live retrieval. |
+| `CODESEEK_GRAPH_ACTIVE_MIN_SCORE` | `90` | Minimum tuned graph candidate score required for active injection. |
+| `CODESEEK_GRAPH_SHADOW_MAX_EXPANDED` | `8` | Global cap on graph-shadow expanded candidates. |
+| `CODESEEK_GRAPH_SHADOW_MAX_PER_ANCHOR` | `4` | Per-anchor cap to prevent hub pollution. |
+
+### Active Graph Safety Gates
+
+Active graph candidates are injected only when all of these are true:
+
+- `CODESEEK_GRAPH_RETRIEVAL_SHADOW=true`.
+- `CODESEEK_GRAPH_RETRIEVAL_ACTIVE=true`.
+- `graph_shadow.status == "ready"`.
+- Candidate chunk ID is not already present in normal retrieval.
+- Candidate is not diagnostic-only.
+- Candidate score is at least `CODESEEK_GRAPH_ACTIVE_MIN_SCORE`.
+- Candidate confidence tier is `exact_local` when a confidence tier is available.
+- Candidate `score_reasons` include a `query_match:...` reason.
+- Candidate has a valid `chunk_id` and `relative_path`.
+- Total injected candidates are capped by `CODESEEK_GRAPH_ACTIVE_MAX_ADDED`.
+
+The active path must not enable graph retrieval by default and must not bypass the normal reranking/context safety pipeline.
+
+### Graph Diagnostics
+
+When debug diagnostics are enabled, graph fields are exposed under query diagnostics:
+
+- `diagnostics.graph_shadow`
+- `diagnostics.graph_shadow.status`
+- `diagnostics.graph_shadow.anchors`
+- `diagnostics.graph_shadow.expanded_nodes`
+- `diagnostics.graph_shadow.candidate_chunks`
+- `diagnostics.graph_shadow.diagnostic_neighbors`
+- `diagnostics.graph_shadow.unresolved_imports`
+- `diagnostics.graph_shadow.external_packages`
+- `diagnostics.graph_active`
+- `diagnostics.graph_active.enabled`
+- `diagnostics.graph_active.reason`
+- `diagnostics.graph_active.added_count`
+- `diagnostics.graph_active.added_chunks`
+- `diagnostics.graph_active.skipped_count`
+- `diagnostics.graph_active.skipped_reasons`
+
+Common `graph_active.reason` values:
+
+- `disabled`: active graph retrieval is off.
+- `graph_shadow_not_built`: graph shadow did not produce a ready graph result.
+- `no_eligible_candidates`: shadow ran, but no candidate passed active safety gates.
+- `added`: one or more graph candidates were injected.
+
+### Source Alignment Behavior
+
+Phase 6C fixed baseline source-card drift independently of graph retrieval:
+
+- High-confidence selected paths are promoted before display cap truncation.
+- Graph-active sources are treated as required display sources when active injection is enabled.
+- Reasoning-only context is allowed and is reported as `reasoning_only_paths`; it is not counted as missing source cards.
+- API `source_alignment` diagnostics are reconciled with the final rendered response sources after validation/post-processing.
+- Source cards are preserved when an answer does not mention a file path inline, instead of being cleared solely because no path was written in the answer text.
+
+### Validation History
+
+Phase 6B active ON/OFF safety evaluation on the Portfolio query set:
+
+- Five Portfolio queries were checked with active graph OFF and ON.
+- Active graph improved `projects-section` by adding `src/components/Projects.tsx`.
+- Active graph also added `src/lib/data.ts` for `project-data`.
+- Worsened queries: 0.
+- Noisy active-added paths: none.
+- Source-alignment issues observed in that pass were baseline source-card issues, not active graph regressions.
+
+Phase 6C source alignment rerun:
+
+- Source alignment failures were reduced to none for completed responses.
+- `home-page` includes `src/app/page.tsx`.
+- `project-data` includes `src/lib/data.ts`.
+- `stars-background` OFF retry includes `src/components/StarsCanvas.tsx`; ON live validation can still be affected by provider timeout, which is not a graph retrieval regression.
+- `projects-section` still improves with `graph_active`.
+
+Graph fixture isolation:
+
+- Graph tests previously could fail when `CODESEEK_SQLITE_PATH` leaked from a developer shell.
+- The graph fixture now sets both `CODESEEK_SQLITE_PATH` and `CODESEEK_DB_PATH` to an isolated per-test temp DB.
+- The graph suite passed after this fixture isolation fix.
+
+### Operational Note
+
+For local validation, avoid running `uvicorn --reload` across the whole repository. Reload scanning can crash if transient folders disappear while the watcher is walking the tree. Prefer no reload for validation, or constrain reload scope:
+
+```bash
+backend/.venv/bin/python -m uvicorn retrieval.api_service:app --reload --reload-dir backend
+```
+
 ## 1. Decisions
 
 ### Implementation Direction
@@ -32,15 +142,24 @@ The graph must be built as a sidecar to the existing RAG system. Existing chunki
 - `backend/retrieval/search/searcher.py`: hybrid search and current dependency/import-style expansion points.
 - `frontend/src/App.jsx`, `frontend/src/components/SessionView.jsx`, `frontend/src/utils/api.js`: app shell, session UI, and API client patterns.
 
-### Current Code That Needs New Sidecar Modules
+### Implemented Graph Sidecar Modules
 
-- No graph schema exists.
-- No graph builder exists.
-- No graph store/resolver exists.
-- No graph API exists.
-- No graph visualization UI exists.
-- No graph-aware retrieval expander exists.
-- Calls/imports are currently stored in chunks/Qdrant payloads, not as relational edges.
+- `backend/retrieval/db.py`: `code_graph_nodes`, `code_graph_edges`, and `code_graph_builds` schema.
+- `backend/retrieval/graph/ids.py`: deterministic stable node and edge IDs.
+- `backend/retrieval/graph/models.py`: graph data models.
+- `backend/retrieval/graph/store.py`: graph persistence, cleanup, tree/overview/file/neighbor reads.
+- `backend/retrieval/graph/builder.py`: hierarchy graph and import graph construction from existing chunks.
+- `backend/retrieval/graph/api.py`: graph API helpers used by the backend API service.
+- `backend/retrieval/graph/retrieval.py`: graph shadow expansion, noise-aware scoring, and active candidate eligibility helpers.
+- `backend/scripts/evaluate_graph_shadow.py`: graph shadow evaluation/reporting utility.
+- `backend/tests/graph/*`: focused graph schema, builder, cleanup, API, shadow, active, and evaluation tests.
+
+### Remaining Future Work
+
+- Graph visualization UI is not implemented.
+- Call graph and route graph are not implemented.
+- Active graph retrieval remains opt-in behind feature flags.
+- Broader eval coverage is still required before enabling active graph by default.
 
 ## 2. Schema
 
@@ -682,6 +801,10 @@ Frontend:
 
 ## 10. Final Recommendation
 
-Build the backend graph and shadow retrieval first if the goal is answer quality. Build the canvas earlier only if the goal is demo/interview impact. The default plan should be quality-first.
+The feature is ready for review as a quality-first graph retrieval foundation:
 
-The safest next implementation step is Phase 1: graph build status, stable node/edge schema, hierarchy nodes/edges, and chunk-link validation. Do not activate graph retrieval until shadow-mode evaluation shows that graph candidates improve or preserve groundedness, file/symbol hit rate, wrong top-1 rate, and latency.
+- Keep active graph retrieval disabled by default.
+- Use graph shadow diagnostics and the graph shadow evaluator for ongoing tuning.
+- Enable active graph retrieval only in controlled validation or opt-in environments until broader eval coverage is available.
+- Treat visualization, call graph, route graph, and deeper trace features as later phases.
+- Continue to validate answer quality with focused ON/OFF comparisons before widening active use.
