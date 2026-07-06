@@ -18,6 +18,7 @@ SAFE_DEFAULT_EDGE_TYPES = ("imports", "defines", "contains")
 UNRESOLVED_IMPORT_EDGE_TYPE = "unresolved_import"
 ANSWER_CANDIDATE_NODE_TYPES = {"file", "class", "function", "method", "component"}
 SYMBOL_NODE_TYPES = {"class", "function", "method", "component"}
+SHARED_IMPORT_TARGET_FANIN_THRESHOLD = 3
 QUERY_STOPWORDS = {
     "a",
     "about",
@@ -46,6 +47,8 @@ QUERY_STOPWORDS = {
     "what",
     "where",
 }
+LAYOUT_QUERY_TERMS = {"layout", "root", "metadata", "shell", "head", "html", "body"}
+PAGE_ENTRY_QUERY_TERMS = {"home", "homepage", "landing", "entry", "root", "page", "app"}
 
 
 @dataclass(frozen=True)
@@ -195,10 +198,12 @@ def expand_graph_shadow_candidates(
     scan_edge_types = allowed_edge_types | {UNRESOLVED_IMPORT_EDGE_TYPE}
     max_expanded = max(1, int(max_expanded or 20))
     max_per_anchor = max(1, int(max_per_anchor or 4))
-    query_tokens = _query_token_set(query or "")
+    query_text = query or ""
+    query_tokens = _query_token_set(query_text)
 
     candidate_nodes_by_id: dict[str, dict] = {}
     candidate_expansions_by_id: dict[str, dict] = {}
+    diagnostic_neighbors_by_id: dict[str, dict] = {}
     unresolved_imports_by_id: dict[str, dict] = {}
     external_packages_by_id: dict[str, dict] = {}
     total_candidates_considered = 0
@@ -208,6 +213,7 @@ def expand_graph_shadow_candidates(
         for scan_node in scan_nodes:
             edges = _edges_for_node(session_id, scan_node["id"], scan_edge_types)
             outgoing_import_count = _outgoing_import_count(edges, scan_node["id"])
+            incoming_import_count = _incoming_import_count(edges, scan_node["id"])
             for edge in edges:
                 if edge["edge_type"] == UNRESOLVED_IMPORT_EDGE_TYPE:
                     if edge.get("source_node_id") == scan_node["id"]:
@@ -244,13 +250,22 @@ def expand_graph_shadow_candidates(
                     anchor=anchor,
                     scan_node=scan_node,
                     query_tokens=query_tokens,
+                    query_text=query_text,
                     outgoing_import_count=outgoing_import_count,
+                    incoming_import_count=incoming_import_count,
                 )
                 total_candidates_considered += 1
+                if expanded.get("diagnostic_only"):
+                    if expanded["node_id"] not in candidate_expansions_by_id:
+                        current_diagnostic = diagnostic_neighbors_by_id.get(expanded["node_id"])
+                        if current_diagnostic is None or _candidate_quality_tuple(expanded) > _candidate_quality_tuple(current_diagnostic):
+                            diagnostic_neighbors_by_id[expanded["node_id"]] = expanded
+                    continue
                 current = candidate_expansions_by_id.get(expanded["node_id"])
                 if current is None or _candidate_quality_tuple(expanded) > _candidate_quality_tuple(current):
                     candidate_expansions_by_id[expanded["node_id"]] = expanded
                     candidate_nodes_by_id[expanded["node_id"]] = neighbor
+                    diagnostic_neighbors_by_id.pop(expanded["node_id"], None)
 
     ranked_expansions = sorted(candidate_expansions_by_id.values(), key=_expanded_sort_key)
     expanded_nodes, dropped_by_anchor_limit, dropped_by_global_limit = _select_ranked_expansions(
@@ -275,6 +290,7 @@ def expand_graph_shadow_candidates(
         if candidate.get("node_id") in selected_node_ids
     ]
     candidate_chunks.sort(key=_candidate_chunk_sort_key)
+    diagnostic_neighbors = sorted(diagnostic_neighbors_by_id.values(), key=_expanded_sort_key)
     return {
         "enabled": True,
         "status": "ready",
@@ -282,12 +298,14 @@ def expand_graph_shadow_candidates(
         "anchors": [anchor.to_dict() for anchor in anchors],
         "expanded_nodes": expanded_nodes,
         "candidate_chunks": candidate_chunks,
+        "diagnostic_neighbors": diagnostic_neighbors,
         "unresolved_imports": list(unresolved_imports_by_id.values()),
         "external_packages": list(external_packages_by_id.values()),
         "stats": {
             "anchors_count": len(anchors),
             "expanded_nodes_count": len(expanded_nodes),
             "candidate_chunks_count": len(candidate_chunks),
+            "diagnostic_neighbors_count": len(diagnostic_neighbors),
             "edge_types_used": sorted(allowed_edge_types),
             "max_depth": max_depth,
             "max_expanded": max_expanded,
@@ -359,12 +377,14 @@ def _empty_shadow_result(
         "anchors": [],
         "expanded_nodes": [],
         "candidate_chunks": [],
+        "diagnostic_neighbors": [],
         "unresolved_imports": [],
         "external_packages": [],
         "stats": {
             "anchors_count": 0,
             "expanded_nodes_count": 0,
             "candidate_chunks_count": 0,
+            "diagnostic_neighbors_count": 0,
             "edge_types_used": sorted({str(edge_type).strip() for edge_type in edge_types if str(edge_type).strip()}),
             "max_depth": 1,
             "max_per_anchor": 0,
@@ -483,6 +503,7 @@ def _candidate_chunk_with_expansion(candidate: dict, expanded: dict) -> dict:
         "anchor_node_id",
         "anchor_rank",
         "hub_import_count",
+        "fanin_import_count",
     ):
         if key in expanded:
             enriched[key] = expanded[key]
@@ -521,13 +542,17 @@ def _score_expanded_node(
     anchor: GraphAnchor,
     scan_node: dict,
     query_tokens: set[str],
+    query_text: str,
     outgoing_import_count: int,
+    incoming_import_count: int,
 ) -> None:
     score = 0.0
     reasons: list[str] = []
+    diagnostic_only = False
     edge_type = str(edge.get("edge_type") or "")
     direction = str(expanded.get("direction") or "")
     confidence = str(edge.get("confidence_tier") or "")
+    relative_path = normalize_repo_path(expanded.get("relative_path") or "")
 
     if edge_type == "imports" and direction == "outgoing":
         score += 80.0
@@ -571,6 +596,38 @@ def _score_expanded_node(
         score += 28.0 * len(matches)
         reasons.append("query_match:" + ",".join(matches[:5]))
 
+    if edge_type == "imports" and direction == "incoming":
+        if incoming_import_count >= SHARED_IMPORT_TARGET_FANIN_THRESHOLD:
+            penalty = min(42.0, float(incoming_import_count - 1) * 9.0)
+            score -= penalty
+            reasons.append(f"penalty:shared_import_target:{incoming_import_count}_importers")
+            if matches:
+                score += 18.0
+                reasons.append("keep:query_matched_imported_by")
+            else:
+                score -= 60.0
+                diagnostic_only = True
+                reasons.append("penalty:incoming_without_query_match")
+                reasons.append("diagnostic_only:shared_neighbor")
+
+    if _is_layout_file(relative_path):
+        if _query_mentions_layout(query_text, query_tokens):
+            reasons.append("keep:layout_query_match")
+        else:
+            score -= 80.0
+            diagnostic_only = True
+            reasons.append("penalty:layout_file_without_query_match")
+            reasons.append("diagnostic_only:layout_file")
+
+    if _is_app_page_file(relative_path):
+        if _query_mentions_page_entry(query_text, query_tokens):
+            reasons.append("keep:page_entry_query_match")
+        else:
+            score -= 55.0
+            diagnostic_only = True
+            reasons.append("penalty:page_file_without_query_match")
+            reasons.append("diagnostic_only:page_file")
+
     same_path = normalize_repo_path(anchor.node.get("relative_path") or "") == normalize_repo_path(expanded.get("relative_path") or "")
     if same_path and edge_type in {"contains", "defines"}:
         score -= 8.0
@@ -583,11 +640,13 @@ def _score_expanded_node(
 
     expanded["candidate_score"] = round(score, 4)
     expanded["score_reasons"] = reasons
-    expanded["selection_reason"] = "ranked_shadow_candidate"
+    expanded["diagnostic_only"] = diagnostic_only
+    expanded["selection_reason"] = "diagnostic_only" if diagnostic_only else "ranked_shadow_candidate"
     expanded["scan_node_id"] = scan_node.get("id")
     expanded["scan_node_type"] = scan_node.get("node_type")
     expanded["scan_relative_path"] = scan_node.get("relative_path")
     expanded["hub_import_count"] = outgoing_import_count
+    expanded["fanin_import_count"] = incoming_import_count
 
 
 def _query_matches(query_tokens: set[str], expanded: dict) -> list[str]:
@@ -639,6 +698,40 @@ def _outgoing_import_count(edges: list[dict], scan_node_id: str) -> int:
         and edge.get("source_node_id") == scan_node_id
         and edge.get("target_node_id")
     )
+
+
+def _incoming_import_count(edges: list[dict], scan_node_id: str) -> int:
+    return sum(
+        1
+        for edge in edges
+        if edge.get("edge_type") == "imports"
+        and edge.get("target_node_id") == scan_node_id
+        and edge.get("source_node_id")
+    )
+
+
+def _is_layout_file(relative_path: str) -> bool:
+    path = normalize_repo_path(relative_path)
+    return path.endswith("/layout.tsx") or path.endswith("/layout.ts") or path in {"layout.tsx", "layout.ts"}
+
+
+def _is_app_page_file(relative_path: str) -> bool:
+    path = normalize_repo_path(relative_path)
+    return path in {"src/app/page.tsx", "src/app/page.ts", "app/page.tsx", "app/page.ts"}
+
+
+def _query_mentions_layout(query_text: str, query_tokens: set[str]) -> bool:
+    lowered = str(query_text or "").lower()
+    if "layout.ts" in lowered or "root layout" in lowered or "app layout" in lowered:
+        return True
+    return bool(query_tokens.intersection(LAYOUT_QUERY_TERMS))
+
+
+def _query_mentions_page_entry(query_text: str, query_tokens: set[str]) -> bool:
+    lowered = str(query_text or "").lower()
+    if "page.ts" in lowered or "home page" in lowered or "app/page" in lowered:
+        return True
+    return bool(query_tokens.intersection(PAGE_ENTRY_QUERY_TERMS))
 
 
 def _candidate_quality_tuple(expanded: dict) -> tuple[float, int, int]:

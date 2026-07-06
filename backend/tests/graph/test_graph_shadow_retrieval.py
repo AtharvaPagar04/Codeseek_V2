@@ -207,6 +207,168 @@ def test_shadow_imported_by_expansion_includes_importing_file(insert_session, ad
     assert any(item["chunk_id"] == "app-file" for item in result["candidate_chunks"])
 
 
+def test_shadow_shared_imported_by_without_query_match_is_diagnostic_only(
+    insert_session,
+    add_session_chunks,
+    make_chunk,
+):
+    session_id = insert_session()
+    chunks = [
+        make_chunk(
+            chunk_id="data-file",
+            relative_path="src/lib/data.ts",
+            chunk_type="file",
+            language="typescript",
+        ),
+    ]
+    add_session_chunks(session_id, "src/lib/data.ts", ["data-file"])
+    for name in ("About", "Hero", "Projects"):
+        rel_path = f"src/components/{name}.tsx"
+        file_chunk_id = f"{name.lower()}-file"
+        component_chunk_id = f"{name.lower()}-component"
+        chunks.extend(
+            [
+                make_chunk(
+                    chunk_id=file_chunk_id,
+                    relative_path=rel_path,
+                    chunk_type="file",
+                    language="typescript",
+                    imports=['import { projects } from "@/lib/data";'],
+                ),
+                make_chunk(
+                    chunk_id=component_chunk_id,
+                    relative_path=rel_path,
+                    chunk_type="component",
+                    symbol_name=name,
+                    qualified_symbol=f"{rel_path}::{name}",
+                    language="typescript",
+                ),
+            ]
+        )
+        add_session_chunks(session_id, rel_path, [file_chunk_id, component_chunk_id])
+    rebuild_session_hierarchy_graph(session_id, chunks)
+
+    result = run_graph_shadow_retrieval(
+        session_id,
+        [{"chunk_id": "data-file", "relative_path": "src/lib/data.ts"}],
+        enabled=True,
+        query="Where is the project data stored?",
+    )
+
+    candidate_paths = {item["relative_path"] for item in result["candidate_chunks"]}
+    diagnostic_paths = {item["relative_path"] for item in result["diagnostic_neighbors"]}
+    assert "src/components/About.tsx" not in candidate_paths
+    assert "src/components/Hero.tsx" not in candidate_paths
+    assert {"src/components/About.tsx", "src/components/Hero.tsx"}.issubset(diagnostic_paths)
+    about = next(item for item in result["diagnostic_neighbors"] if item["relative_path"] == "src/components/About.tsx")
+    assert about["diagnostic_only"] is True
+    assert "penalty:shared_import_target:3_importers" in about["score_reasons"]
+    assert "penalty:incoming_without_query_match" in about["score_reasons"]
+    assert "diagnostic_only:shared_neighbor" in about["score_reasons"]
+    assert result["stats"]["diagnostic_neighbors_count"] >= 2
+
+
+def test_shadow_query_matched_imported_by_survives_shared_target_penalty(
+    insert_session,
+    add_session_chunks,
+    make_chunk,
+):
+    session_id = insert_session()
+    chunks = [
+        make_chunk(
+            chunk_id="data-file",
+            relative_path="src/lib/data.ts",
+            chunk_type="file",
+            language="typescript",
+        ),
+    ]
+    add_session_chunks(session_id, "src/lib/data.ts", ["data-file"])
+    for name in ("About", "Hero", "Projects"):
+        rel_path = f"src/components/{name}.tsx"
+        file_chunk_id = f"{name.lower()}-file"
+        component_chunk_id = f"{name.lower()}-component"
+        chunks.extend(
+            [
+                make_chunk(
+                    chunk_id=file_chunk_id,
+                    relative_path=rel_path,
+                    chunk_type="file",
+                    language="typescript",
+                    imports=['import { projects } from "@/lib/data";'],
+                ),
+                make_chunk(
+                    chunk_id=component_chunk_id,
+                    relative_path=rel_path,
+                    chunk_type="component",
+                    symbol_name=name,
+                    qualified_symbol=f"{rel_path}::{name}",
+                    language="typescript",
+                ),
+            ]
+        )
+        add_session_chunks(session_id, rel_path, [file_chunk_id, component_chunk_id])
+    rebuild_session_hierarchy_graph(session_id, chunks)
+
+    result = run_graph_shadow_retrieval(
+        session_id,
+        [{"chunk_id": "data-file", "relative_path": "src/lib/data.ts"}],
+        enabled=True,
+        query="Where is the projects section rendered?",
+    )
+
+    projects = next(item for item in result["candidate_chunks"] if item["chunk_id"] == "projects-file")
+    assert projects["relative_path"] == "src/components/Projects.tsx"
+    assert "keep:query_matched_imported_by" in projects["score_reasons"]
+    assert "query_match:projects" in projects["score_reasons"]
+
+
+def test_shadow_layout_imported_by_is_diagnostic_without_layout_query(
+    insert_session,
+    add_session_chunks,
+    make_chunk,
+):
+    session_id = insert_session()
+    chunks = [
+        make_chunk(
+            chunk_id="layout-file",
+            relative_path="src/app/layout.tsx",
+            chunk_type="file",
+            language="typescript",
+            imports=['import StarsBackground from "@/components/StarsBackground";'],
+        ),
+        make_chunk(
+            chunk_id="stars-file",
+            relative_path="src/components/StarsBackground.tsx",
+            chunk_type="file",
+            language="typescript",
+        ),
+        make_chunk(
+            chunk_id="stars-component",
+            relative_path="src/components/StarsBackground.tsx",
+            chunk_type="component",
+            symbol_name="StarsBackground",
+            qualified_symbol="src/components/StarsBackground.tsx::StarsBackground",
+            language="typescript",
+        ),
+    ]
+    add_session_chunks(session_id, "src/app/layout.tsx", ["layout-file"])
+    add_session_chunks(session_id, "src/components/StarsBackground.tsx", ["stars-file", "stars-component"])
+    rebuild_session_hierarchy_graph(session_id, chunks)
+
+    result = run_graph_shadow_retrieval(
+        session_id,
+        [{"chunk_id": "stars-file", "relative_path": "src/components/StarsBackground.tsx"}],
+        enabled=True,
+        query="Where is the stars background implemented?",
+    )
+
+    assert not any(item["relative_path"] == "src/app/layout.tsx" for item in result["candidate_chunks"])
+    layout = next(item for item in result["diagnostic_neighbors"] if item["relative_path"] == "src/app/layout.tsx")
+    assert layout["diagnostic_only"] is True
+    assert "penalty:layout_file_without_query_match" in layout["score_reasons"]
+    assert "diagnostic_only:layout_file" in layout["score_reasons"]
+
+
 def test_shadow_external_package_is_diagnostic_only(insert_session, add_session_chunks, make_chunk):
     session_id = insert_session()
     chunks = [

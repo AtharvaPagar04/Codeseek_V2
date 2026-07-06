@@ -137,6 +137,7 @@ def build_query_result(case: dict, query_result: dict, *, top_k: int = 10) -> di
     normal_candidates = list(query_result.get("normal_candidates") or [])[:top_k]
     graph_shadow = query_result.get("graph_shadow") if isinstance(query_result.get("graph_shadow"), dict) else {}
     candidate_chunks = list(graph_shadow.get("candidate_chunks") or [])
+    diagnostic_neighbors = list(graph_shadow.get("diagnostic_neighbors") or [])
     external_packages = list(graph_shadow.get("external_packages") or [])
     unresolved_imports = list(graph_shadow.get("unresolved_imports") or [])
     graph_status = str(graph_shadow.get("status") or "").strip()
@@ -147,6 +148,7 @@ def build_query_result(case: dict, query_result: dict, *, top_k: int = 10) -> di
     graph_shadow_symbols = _unique_strings(item.get("symbol_name") for item in candidate_chunks if item.get("symbol_name"))
     graph_new_files = [path for path in graph_shadow_files if path not in normal_top_files]
     graph_new_symbols = [symbol for symbol in graph_shadow_symbols if symbol not in normal_top_symbols]
+    graph_diagnostic_only_files = _unique_paths(item.get("relative_path") for item in diagnostic_neighbors)
     expected_files = _unique_paths(case.get("expected_files") or [])
     expected_symbols = _unique_strings(case.get("expected_symbols") or [])
     graph_noisy_files = [path for path in graph_new_files if path not in expected_files]
@@ -185,6 +187,7 @@ def build_query_result(case: dict, query_result: dict, *, top_k: int = 10) -> di
         "graph_new_files": graph_new_files,
         "graph_new_symbols": graph_new_symbols,
         "graph_noisy_files": graph_noisy_files,
+        "graph_diagnostic_only_files": graph_diagnostic_only_files,
         "expected_files": expected_files,
         "expected_symbols": expected_symbols,
         "expected_file_hit_normal": expected_file_hit_normal,
@@ -197,12 +200,15 @@ def build_query_result(case: dict, query_result: dict, *, top_k: int = 10) -> di
         "graph_external_package_count": len(external_packages),
         "graph_unresolved_import_count": len(unresolved_imports),
         "graph_noisy_file_count": len(graph_noisy_files),
+        "graph_diagnostic_neighbor_count": len(diagnostic_neighbors),
         "graph_candidate_details": [compact_graph_candidate(item) for item in candidate_chunks],
+        "graph_diagnostic_neighbors": [compact_graph_candidate(item) for item in diagnostic_neighbors],
         "graph_shadow": {
             "enabled": bool(graph_shadow.get("enabled", False)),
             "status": graph_shadow.get("status", ""),
             "anchors": list(graph_shadow.get("anchors") or []),
             "expanded_nodes": list(graph_shadow.get("expanded_nodes") or []),
+            "diagnostic_neighbors": diagnostic_neighbors,
             "candidate_chunks": candidate_chunks,
             "unresolved_imports": unresolved_imports,
             "external_packages": external_packages,
@@ -228,6 +234,7 @@ def build_query_error_result(case: dict, error: str, *, top_k: int = 10) -> dict
         "graph_new_files": [],
         "graph_new_symbols": [],
         "graph_noisy_files": [],
+        "graph_diagnostic_only_files": [],
         "expected_files": _unique_paths(case.get("expected_files") or []),
         "expected_symbols": _unique_strings(case.get("expected_symbols") or []),
         "expected_file_hit_normal": [],
@@ -240,12 +247,15 @@ def build_query_error_result(case: dict, error: str, *, top_k: int = 10) -> dict
         "graph_external_package_count": 0,
         "graph_unresolved_import_count": 0,
         "graph_noisy_file_count": 0,
+        "graph_diagnostic_neighbor_count": 0,
         "graph_candidate_details": [],
+        "graph_diagnostic_neighbors": [],
         "graph_shadow": {
             "enabled": True,
             "status": "error",
             "anchors": [],
             "expanded_nodes": [],
+            "diagnostic_neighbors": [],
             "candidate_chunks": [],
             "unresolved_imports": [],
             "external_packages": [],
@@ -289,6 +299,11 @@ def build_summary(results: list[dict]) -> dict:
         for item in results
         for path in item.get("graph_noisy_files", [])
     )
+    diagnostic_files = Counter(
+        path
+        for item in results
+        for path in item.get("graph_diagnostic_only_files", [])
+    )
     unresolved_imports = Counter(
         str(unresolved.get("raw_reference") or "").strip()
         for item in results
@@ -306,9 +321,14 @@ def build_summary(results: list[dict]) -> dict:
         "queries_where_graph_added_noisy_file": sum(1 for item in results if item.get("graph_noisy_files")),
         "average_graph_candidate_count": _average(graph_candidate_counts),
         "average_graph_noisy_file_count": _average([int(item.get("graph_noisy_file_count", 0) or 0) for item in results]),
+        "average_diagnostic_neighbor_count": _average([int(item.get("graph_diagnostic_neighbor_count", 0) or 0) for item in results]),
         "average_unresolved_import_count": _average(unresolved_counts),
         "top_added_files": [{"file": file_path, "count": count} for file_path, count in added_files.most_common(10)],
         "top_noisy_files": [{"file": file_path, "count": count} for file_path, count in noisy_files.most_common(10)],
+        "top_diagnostic_only_files": [
+            {"file": file_path, "count": count}
+            for file_path, count in diagnostic_files.most_common(10)
+        ],
         "top_unresolved_imports": [
             {"raw_reference": raw_reference, "count": count}
             for raw_reference, count in unresolved_imports.most_common(10)
@@ -327,9 +347,11 @@ def _empty_summary() -> dict:
         "queries_where_graph_added_noisy_file": 0,
         "average_graph_candidate_count": 0.0,
         "average_graph_noisy_file_count": 0.0,
+        "average_diagnostic_neighbor_count": 0.0,
         "average_unresolved_import_count": 0.0,
         "top_added_files": [],
         "top_noisy_files": [],
+        "top_diagnostic_only_files": [],
         "top_unresolved_imports": [],
         "classification_counts": {},
     }
@@ -384,13 +406,15 @@ def compact_candidate(item: dict) -> dict:
 
 def compact_graph_candidate(item: dict) -> dict:
     compact = compact_candidate(item)
-    for key in ("candidate_score", "selection_rank", "anchor_rank", "hub_import_count"):
+    for key in ("candidate_score", "selection_rank", "anchor_rank", "hub_import_count", "fanin_import_count"):
         if key not in item:
             continue
         try:
             compact[key] = round(float(item.get(key) or 0.0), 4)
         except (TypeError, ValueError):
             compact[key] = item.get(key)
+    if "diagnostic_only" in item:
+        compact["diagnostic_only"] = bool(item.get("diagnostic_only"))
     for key in ("expansion_reason", "edge_type", "direction", "selection_reason"):
         value = item.get(key)
         if value not in (None, "", [], {}):
@@ -415,6 +439,7 @@ def render_markdown_report(report: dict) -> str:
         f"- Queries where graph added expected file: {summary.get('queries_where_graph_added_expected_file', 0)}",
         f"- Average graph candidate count: {_format_float(summary.get('average_graph_candidate_count', 0.0))}",
         f"- Average noisy files added: {_format_float(summary.get('average_graph_noisy_file_count', 0.0))}",
+        f"- Average diagnostic neighbors: {_format_float(summary.get('average_diagnostic_neighbor_count', 0.0))}",
         f"- Average unresolved imports: {_format_float(summary.get('average_unresolved_import_count', 0.0))}",
         "",
         "## Query Details",
@@ -430,6 +455,7 @@ def render_markdown_report(report: dict) -> str:
                 f"- Normal top files: {_format_list(result.get('normal_top_files', []))}",
                 f"- Graph shadow added files: {_format_list(result.get('graph_new_files', []))}",
                 f"- Graph shadow noisy files: {_format_list(result.get('graph_noisy_files', []))}",
+                f"- Graph diagnostic-only files: {_format_list(result.get('graph_diagnostic_only_files', []))}",
                 f"- Graph candidate scores: {_format_graph_candidate_scores(result)}",
                 f"- Expected files hit by normal retrieval: {_format_list(result.get('expected_file_hit_normal', []))}",
                 f"- Expected files added by graph shadow: {_format_list(result.get('graph_added_expected_file', []))}",

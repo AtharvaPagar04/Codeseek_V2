@@ -308,6 +308,15 @@ def test_expected_file_hit_and_graph_added_expected_file_calculation():
             "unresolved_imports": [],
             "anchors": [],
             "expanded_nodes": [],
+            "diagnostic_neighbors": [
+                {
+                    "node_id": "docs-node",
+                    "relative_path": "backend/docs.py",
+                    "candidate_score": -12.0,
+                    "diagnostic_only": True,
+                    "score_reasons": ["diagnostic_only:shared_neighbor"],
+                }
+            ],
             "overlap": {},
             "stats": {},
         },
@@ -319,11 +328,15 @@ def test_expected_file_hit_and_graph_added_expected_file_calculation():
     assert result["graph_shadow_files"] == ["backend/jwt.py", "backend/utils.py"]
     assert result["graph_new_files"] == ["backend/jwt.py", "backend/utils.py"]
     assert result["graph_noisy_files"] == ["backend/utils.py"]
+    assert result["graph_diagnostic_only_files"] == ["backend/docs.py"]
     assert result["expected_file_hit_normal"] == ["backend/auth.py"]
     assert result["expected_file_hit_graph_shadow"] == ["backend/jwt.py"]
     assert result["graph_added_expected_file"] == ["backend/jwt.py"]
     assert result["graph_added_expected_symbol"] == ["verify_token"]
     assert result["graph_noisy_file_count"] == 1
+    assert result["graph_diagnostic_neighbor_count"] == 1
+    assert result["graph_diagnostic_neighbors"][0]["diagnostic_only"] is True
+    assert result["graph_diagnostic_neighbors"][0]["score_reasons"] == ["diagnostic_only:shared_neighbor"]
     assert result["graph_candidate_details"][0]["candidate_score"] == 118.0
     assert result["graph_candidate_details"][0]["score_reasons"] == [
         "edge:outgoing_import",
@@ -343,6 +356,8 @@ def test_summary_counts_and_frequency_tables():
             "graph_new_files": ["backend/jwt.py", "backend/utils.py"],
             "graph_noisy_files": ["backend/utils.py"],
             "graph_noisy_file_count": 1,
+            "graph_diagnostic_only_files": ["backend/docs.py"],
+            "graph_diagnostic_neighbor_count": 1,
             "graph_shadow": {"unresolved_imports": []},
         },
         {
@@ -354,6 +369,8 @@ def test_summary_counts_and_frequency_tables():
             "graph_new_files": [],
             "graph_noisy_files": [],
             "graph_noisy_file_count": 0,
+            "graph_diagnostic_only_files": [],
+            "graph_diagnostic_neighbor_count": 0,
             "graph_shadow": {
                 "unresolved_imports": [{"raw_reference": "from missing.module import X"}],
             },
@@ -369,6 +386,7 @@ def test_summary_counts_and_frequency_tables():
     assert summary["queries_where_graph_added_noisy_file"] == 1
     assert summary["average_graph_candidate_count"] == 1.0
     assert summary["average_graph_noisy_file_count"] == 0.5
+    assert summary["average_diagnostic_neighbor_count"] == 0.5
     assert summary["average_unresolved_import_count"] == 0.5
     assert summary["top_added_files"][0] == {"file": "backend/jwt.py", "count": 1}
     assert summary["top_unresolved_imports"][0] == {
@@ -376,6 +394,7 @@ def test_summary_counts_and_frequency_tables():
         "count": 1,
     }
     assert summary["top_noisy_files"][0] == {"file": "backend/utils.py", "count": 1}
+    assert summary["top_diagnostic_only_files"][0] == {"file": "backend/docs.py", "count": 1}
     assert summary["classification_counts"]["graph_helped"] == 1
 
 
@@ -409,6 +428,7 @@ def test_markdown_report_generation_contains_required_sections():
                 "normal_top_files": ["backend/auth.py"],
                 "graph_new_files": ["backend/jwt.py"],
                 "graph_noisy_files": [],
+                "graph_diagnostic_only_files": ["backend/docs.py"],
                 "graph_candidate_details": [
                     {
                         "relative_path": "backend/jwt.py",
@@ -435,6 +455,7 @@ def test_markdown_report_generation_contains_required_sections():
     assert "- Queries where graph added expected file: 1" in markdown
     assert "- Graph shadow added files: backend/jwt.py" in markdown
     assert "- Graph shadow noisy files: none" in markdown
+    assert "- Graph diagnostic-only files: backend/docs.py" in markdown
     assert "- Graph candidate scores: backend/jwt.py (118.0: edge:outgoing_import,query_match:jwt)" in markdown
     assert "- External packages: pyjwt" in markdown
     assert "- Notes: auth flow" in markdown
