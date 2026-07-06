@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
+import re
 import time
 from typing import Iterable
 
@@ -16,6 +18,34 @@ SAFE_DEFAULT_EDGE_TYPES = ("imports", "defines", "contains")
 UNRESOLVED_IMPORT_EDGE_TYPE = "unresolved_import"
 ANSWER_CANDIDATE_NODE_TYPES = {"file", "class", "function", "method", "component"}
 SYMBOL_NODE_TYPES = {"class", "function", "method", "component"}
+QUERY_STOPWORDS = {
+    "a",
+    "about",
+    "an",
+    "and",
+    "are",
+    "code",
+    "component",
+    "does",
+    "do",
+    "file",
+    "for",
+    "from",
+    "how",
+    "implemented",
+    "in",
+    "is",
+    "of",
+    "on",
+    "page",
+    "render",
+    "rendered",
+    "section",
+    "the",
+    "to",
+    "what",
+    "where",
+}
 
 
 @dataclass(frozen=True)
@@ -50,7 +80,9 @@ def run_graph_shadow_retrieval(
     enabled: bool | None = None,
     max_anchors: int | None = None,
     max_expanded: int | None = None,
+    max_per_anchor: int | None = None,
     edge_types: Iterable[str] | None = None,
+    query: str | None = None,
 ) -> dict:
     """Run bounded graph expansion for diagnostics without mutating retrieval hits."""
     config = get_graph_shadow_config()
@@ -58,6 +90,7 @@ def run_graph_shadow_retrieval(
     edge_types_tuple = tuple(edge_types or config.get("edge_types") or SAFE_DEFAULT_EDGE_TYPES)
     max_anchors_value = _positive_int(max_anchors, int(config.get("max_anchors") or 5))
     max_expanded_value = _positive_int(max_expanded, int(config.get("max_expanded") or 20))
+    max_per_anchor_value = _positive_int(max_per_anchor, int(config.get("max_per_anchor") or 4))
     started = time.perf_counter()
 
     if not shadow_enabled:
@@ -101,12 +134,16 @@ def run_graph_shadow_retrieval(
             edge_types=edge_types_tuple,
             max_depth=1,
             max_expanded=max_expanded_value,
+            max_per_anchor=max_per_anchor_value,
+            query=query,
         )
         result["enabled"] = True
         result["status"] = "ready"
         result["session_id"] = resolved_session_id
         result["graph_status"] = status
         result["overlap"] = summarize_graph_shadow_overlap(retrieval_hits, result)
+        result["stats"]["new_files_added_count"] = len(result["overlap"].get("new_files_added") or [])
+        result["stats"]["new_symbols_added_count"] = len(result["overlap"].get("new_symbols_added") or [])
         result["stats"]["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
         return result
     except Exception as exc:
@@ -147,6 +184,8 @@ def expand_graph_shadow_candidates(
     edge_types: Iterable[str] = SAFE_DEFAULT_EDGE_TYPES,
     max_depth: int = 1,
     max_expanded: int = 20,
+    max_per_anchor: int = 4,
+    query: str | None = None,
 ) -> dict:
     """Expand graph anchors by one hop and return diagnostics only."""
     max_depth = 1
@@ -155,21 +194,21 @@ def expand_graph_shadow_candidates(
         allowed_edge_types = set(SAFE_DEFAULT_EDGE_TYPES)
     scan_edge_types = allowed_edge_types | {UNRESOLVED_IMPORT_EDGE_TYPE}
     max_expanded = max(1, int(max_expanded or 20))
+    max_per_anchor = max(1, int(max_per_anchor or 4))
+    query_tokens = _query_token_set(query or "")
 
-    expanded_nodes_by_id: dict[str, dict] = {}
-    candidate_chunks_by_id: dict[str, dict] = {}
+    candidate_nodes_by_id: dict[str, dict] = {}
+    candidate_expansions_by_id: dict[str, dict] = {}
     unresolved_imports_by_id: dict[str, dict] = {}
     external_packages_by_id: dict[str, dict] = {}
+    total_candidates_considered = 0
 
     for anchor in anchors:
-        if len(expanded_nodes_by_id) >= max_expanded:
-            break
-
         scan_nodes = _scan_nodes_for_anchor(session_id, anchor)
         for scan_node in scan_nodes:
-            if len(expanded_nodes_by_id) >= max_expanded:
-                break
-            for edge in _edges_for_node(session_id, scan_node["id"], scan_edge_types):
+            edges = _edges_for_node(session_id, scan_node["id"], scan_edge_types)
+            outgoing_import_count = _outgoing_import_count(edges, scan_node["id"])
+            for edge in edges:
                 if edge["edge_type"] == UNRESOLVED_IMPORT_EDGE_TYPE:
                     if edge.get("source_node_id") == scan_node["id"]:
                         unresolved_imports_by_id.setdefault(
@@ -199,19 +238,43 @@ def expand_graph_shadow_candidates(
                     continue
 
                 expanded = _expanded_node_diagnostic(neighbor, edge, anchor, scan_node["id"])
-                if expanded["node_id"] not in expanded_nodes_by_id:
-                    expanded_nodes_by_id[expanded["node_id"]] = expanded
-                    for candidate in _candidate_chunks_for_node(session_id, neighbor):
-                        candidate_chunks_by_id.setdefault(candidate["chunk_id"], candidate)
-                if len(expanded_nodes_by_id) >= max_expanded:
-                    break
+                _score_expanded_node(
+                    expanded,
+                    edge=edge,
+                    anchor=anchor,
+                    scan_node=scan_node,
+                    query_tokens=query_tokens,
+                    outgoing_import_count=outgoing_import_count,
+                )
+                total_candidates_considered += 1
+                current = candidate_expansions_by_id.get(expanded["node_id"])
+                if current is None or _candidate_quality_tuple(expanded) > _candidate_quality_tuple(current):
+                    candidate_expansions_by_id[expanded["node_id"]] = expanded
+                    candidate_nodes_by_id[expanded["node_id"]] = neighbor
 
-    expanded_nodes = list(expanded_nodes_by_id.values())[:max_expanded]
+    ranked_expansions = sorted(candidate_expansions_by_id.values(), key=_expanded_sort_key)
+    expanded_nodes, dropped_by_anchor_limit, dropped_by_global_limit = _select_ranked_expansions(
+        ranked_expansions,
+        max_expanded=max_expanded,
+        max_per_anchor=max_per_anchor,
+    )
+    selected_node_ids = {node["node_id"] for node in expanded_nodes}
+    candidate_chunks_by_id: dict[str, dict] = {}
+    for expanded in expanded_nodes:
+        node = candidate_nodes_by_id.get(expanded["node_id"])
+        if not node:
+            continue
+        for candidate in _candidate_chunks_for_node(session_id, node):
+            enriched = _candidate_chunk_with_expansion(candidate, expanded)
+            existing = candidate_chunks_by_id.get(enriched["chunk_id"])
+            if existing is None or float(enriched.get("candidate_score", 0.0) or 0.0) > float(existing.get("candidate_score", 0.0) or 0.0):
+                candidate_chunks_by_id[enriched["chunk_id"]] = enriched
     candidate_chunks = [
         candidate
         for candidate in candidate_chunks_by_id.values()
-        if candidate.get("node_id") in {node["node_id"] for node in expanded_nodes}
+        if candidate.get("node_id") in selected_node_ids
     ]
+    candidate_chunks.sort(key=_candidate_chunk_sort_key)
     return {
         "enabled": True,
         "status": "ready",
@@ -228,6 +291,10 @@ def expand_graph_shadow_candidates(
             "edge_types_used": sorted(allowed_edge_types),
             "max_depth": max_depth,
             "max_expanded": max_expanded,
+            "max_per_anchor": max_per_anchor,
+            "total_candidates_considered": total_candidates_considered,
+            "candidates_dropped_by_anchor_limit": dropped_by_anchor_limit,
+            "candidates_dropped_by_global_limit": dropped_by_global_limit,
             "external_package_count": len(external_packages_by_id),
             "unresolved_import_count": len(unresolved_imports_by_id),
         },
@@ -268,6 +335,8 @@ def summarize_graph_shadow_overlap(normal_hits: list[dict], graph_candidates: di
         "overlap_chunk_ids": overlap_ids,
         "new_files_added": new_files,
         "new_symbols_added": new_symbols,
+        "new_files_added_count": len(new_files),
+        "new_symbols_added_count": len(new_symbols),
         "external_package_count": external_package_count,
         "unresolved_import_count": unresolved_import_count,
     }
@@ -298,6 +367,12 @@ def _empty_shadow_result(
             "candidate_chunks_count": 0,
             "edge_types_used": sorted({str(edge_type).strip() for edge_type in edge_types if str(edge_type).strip()}),
             "max_depth": 1,
+            "max_per_anchor": 0,
+            "total_candidates_considered": 0,
+            "candidates_dropped_by_anchor_limit": 0,
+            "candidates_dropped_by_global_limit": 0,
+            "new_files_added_count": 0,
+            "new_symbols_added_count": 0,
             "external_package_count": 0,
             "unresolved_import_count": 0,
             "elapsed_ms": int((time.perf_counter() - started) * 1000),
@@ -395,6 +470,25 @@ def _candidate_chunk_from_node(node: dict, chunk_id: str, *, row_symbol: str | N
     }
 
 
+def _candidate_chunk_with_expansion(candidate: dict, expanded: dict) -> dict:
+    enriched = dict(candidate)
+    for key in (
+        "candidate_score",
+        "score_reasons",
+        "selection_reason",
+        "selection_rank",
+        "expansion_reason",
+        "edge_type",
+        "direction",
+        "anchor_node_id",
+        "anchor_rank",
+        "hub_import_count",
+    ):
+        if key in expanded:
+            enriched[key] = expanded[key]
+    return enriched
+
+
 def _expanded_node_diagnostic(node: dict, edge: dict, anchor: GraphAnchor, scan_node_id: str) -> dict:
     direction = "outgoing" if edge.get("source_node_id") == scan_node_id else "incoming"
     reason = edge.get("edge_type")
@@ -416,7 +510,201 @@ def _expanded_node_diagnostic(node: dict, edge: dict, anchor: GraphAnchor, scan_
         "direction": direction,
         "expansion_reason": reason,
         "confidence_tier": edge.get("confidence_tier"),
+        "anchor_rank": anchor.hit_rank,
     }
+
+
+def _score_expanded_node(
+    expanded: dict,
+    *,
+    edge: dict,
+    anchor: GraphAnchor,
+    scan_node: dict,
+    query_tokens: set[str],
+    outgoing_import_count: int,
+) -> None:
+    score = 0.0
+    reasons: list[str] = []
+    edge_type = str(edge.get("edge_type") or "")
+    direction = str(expanded.get("direction") or "")
+    confidence = str(edge.get("confidence_tier") or "")
+
+    if edge_type == "imports" and direction == "outgoing":
+        score += 80.0
+        reasons.append("edge:outgoing_import")
+    elif edge_type == "imports" and direction == "incoming":
+        score += 60.0
+        reasons.append("edge:imported_by")
+    elif edge_type == "defines":
+        score += 35.0
+        reasons.append("edge:defines")
+    elif edge_type == "contains":
+        score += 25.0
+        reasons.append("edge:contains")
+    else:
+        score += 10.0
+        reasons.append(f"edge:{edge_type or 'unknown'}")
+
+    if confidence == "exact_local":
+        score += 10.0
+        reasons.append("confidence:exact_local")
+    elif confidence:
+        reasons.append(f"confidence:{confidence}")
+
+    if anchor.anchor_type == "chunk_id":
+        score += 8.0
+        reasons.append("anchor:chunk_id")
+    elif anchor.anchor_type.startswith("relative_path_"):
+        score += 5.0
+        reasons.append(f"anchor:{anchor.anchor_type}")
+    else:
+        score += 3.0
+        reasons.append(f"anchor:{anchor.anchor_type}")
+
+    rank_bonus = max(0.0, 6.0 - float(anchor.hit_rank))
+    if rank_bonus:
+        score += rank_bonus
+        reasons.append(f"anchor_rank:{anchor.hit_rank}")
+
+    matches = _query_matches(query_tokens, expanded)
+    if matches:
+        score += 28.0 * len(matches)
+        reasons.append("query_match:" + ",".join(matches[:5]))
+
+    same_path = normalize_repo_path(anchor.node.get("relative_path") or "") == normalize_repo_path(expanded.get("relative_path") or "")
+    if same_path and edge_type in {"contains", "defines"}:
+        score -= 8.0
+        reasons.append("penalty:same_file_structure")
+
+    if edge_type == "imports" and direction == "outgoing" and outgoing_import_count > 4:
+        penalty = min(30.0, float(outgoing_import_count - 4) * 3.0)
+        score -= penalty
+        reasons.append(f"hub_penalty:{outgoing_import_count}_imports")
+
+    expanded["candidate_score"] = round(score, 4)
+    expanded["score_reasons"] = reasons
+    expanded["selection_reason"] = "ranked_shadow_candidate"
+    expanded["scan_node_id"] = scan_node.get("id")
+    expanded["scan_node_type"] = scan_node.get("node_type")
+    expanded["scan_relative_path"] = scan_node.get("relative_path")
+    expanded["hub_import_count"] = outgoing_import_count
+
+
+def _query_matches(query_tokens: set[str], expanded: dict) -> list[str]:
+    if not query_tokens:
+        return []
+    candidate_tokens = _text_token_set(
+        expanded.get("name"),
+        expanded.get("qualified_name"),
+        expanded.get("relative_path"),
+    )
+    return sorted(query_tokens.intersection(candidate_tokens))
+
+
+def _query_token_set(query: str) -> set[str]:
+    return _expand_token_variants(_text_token_set(query))
+
+
+def _text_token_set(*values: object) -> set[str]:
+    tokens: set[str] = set()
+    for value in values:
+        text = str(value or "")
+        if not text:
+            continue
+        text = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
+        for token in re.findall(r"[A-Za-z0-9_]+", text.lower()):
+            if len(token) < 3 or token in QUERY_STOPWORDS:
+                continue
+            tokens.add(token)
+    return tokens
+
+
+def _expand_token_variants(tokens: set[str]) -> set[str]:
+    expanded = set(tokens)
+    for token in list(tokens):
+        if len(token) <= 3:
+            continue
+        if token.endswith("s"):
+            expanded.add(token[:-1])
+        else:
+            expanded.add(token + "s")
+    return expanded
+
+
+def _outgoing_import_count(edges: list[dict], scan_node_id: str) -> int:
+    return sum(
+        1
+        for edge in edges
+        if edge.get("edge_type") == "imports"
+        and edge.get("source_node_id") == scan_node_id
+        and edge.get("target_node_id")
+    )
+
+
+def _candidate_quality_tuple(expanded: dict) -> tuple[float, int, int]:
+    return (
+        float(expanded.get("candidate_score", 0.0) or 0.0),
+        -int(expanded.get("anchor_rank", 999) or 999),
+        -_edge_sort_rank(expanded),
+    )
+
+
+def _expanded_sort_key(expanded: dict) -> tuple[float, int, int, str, str]:
+    return (
+        -float(expanded.get("candidate_score", 0.0) or 0.0),
+        int(expanded.get("anchor_rank", 999) or 999),
+        _edge_sort_rank(expanded),
+        str(expanded.get("relative_path") or ""),
+        str(expanded.get("node_id") or ""),
+    )
+
+
+def _candidate_chunk_sort_key(candidate: dict) -> tuple[float, int, str, str]:
+    return (
+        -float(candidate.get("candidate_score", 0.0) or 0.0),
+        int(candidate.get("anchor_rank", 999) or 999),
+        str(candidate.get("relative_path") or ""),
+        str(candidate.get("chunk_id") or ""),
+    )
+
+
+def _edge_sort_rank(expanded: dict) -> int:
+    edge_type = expanded.get("edge_type")
+    direction = expanded.get("direction")
+    if edge_type == "imports" and direction == "outgoing":
+        return 0
+    if edge_type == "imports" and direction == "incoming":
+        return 1
+    if edge_type == "defines":
+        return 2
+    if edge_type == "contains":
+        return 3
+    return 9
+
+
+def _select_ranked_expansions(
+    ranked_expansions: list[dict],
+    *,
+    max_expanded: int,
+    max_per_anchor: int,
+) -> tuple[list[dict], int, int]:
+    selected: list[dict] = []
+    per_anchor_counts: dict[str, int] = defaultdict(int)
+    dropped_by_anchor_limit = 0
+    dropped_by_global_limit = 0
+    for expanded in ranked_expansions:
+        anchor_id = str(expanded.get("anchor_node_id") or "")
+        if per_anchor_counts[anchor_id] >= max_per_anchor:
+            dropped_by_anchor_limit += 1
+            continue
+        if len(selected) >= max_expanded:
+            dropped_by_global_limit += 1
+            continue
+        selected_item = dict(expanded)
+        selected_item["selection_rank"] = len(selected) + 1
+        selected.append(selected_item)
+        per_anchor_counts[anchor_id] += 1
+    return selected, dropped_by_anchor_limit, dropped_by_global_limit
 
 
 def _unresolved_import_diagnostic(edge: dict, anchor: GraphAnchor) -> dict:

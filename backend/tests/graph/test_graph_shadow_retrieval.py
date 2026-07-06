@@ -110,6 +110,71 @@ def test_shadow_import_expansion_includes_src_alias_barrel_component(
     assert not result["external_packages"]
 
 
+def test_shadow_ranking_caps_hub_anchor_but_keeps_query_matched_import(
+    insert_session,
+    add_session_chunks,
+    make_chunk,
+):
+    session_id = insert_session()
+    component_names = ["Hero", "About", "Projects", "Skills", "Experience", "Contact"]
+    imports = [f'import {name} from "@/components/{name}";' for name in component_names]
+    chunks = [
+        make_chunk(
+            chunk_id="page-file",
+            relative_path="src/app/page.tsx",
+            chunk_type="file",
+            language="typescript",
+            imports=imports,
+        ),
+    ]
+    add_session_chunks(session_id, "src/app/page.tsx", ["page-file"])
+    for name in component_names:
+        rel_path = f"src/components/{name}.tsx"
+        file_chunk_id = f"{name.lower()}-file"
+        component_chunk_id = f"{name.lower()}-component"
+        chunks.extend(
+            [
+                make_chunk(
+                    chunk_id=file_chunk_id,
+                    relative_path=rel_path,
+                    chunk_type="file",
+                    language="typescript",
+                ),
+                make_chunk(
+                    chunk_id=component_chunk_id,
+                    relative_path=rel_path,
+                    chunk_type="component",
+                    symbol_name=name,
+                    qualified_symbol=f"{rel_path}::{name}",
+                    language="typescript",
+                ),
+            ]
+        )
+        add_session_chunks(session_id, rel_path, [file_chunk_id, component_chunk_id])
+    rebuild_session_hierarchy_graph(session_id, chunks)
+
+    result = run_graph_shadow_retrieval(
+        session_id,
+        [{"chunk_id": "page-file", "relative_path": "src/app/page.tsx"}],
+        enabled=True,
+        max_per_anchor=3,
+        query="Where is the projects section rendered?",
+    )
+
+    assert len(result["expanded_nodes"]) == 3
+    assert result["stats"]["total_candidates_considered"] >= len(component_names)
+    assert result["stats"]["candidates_dropped_by_anchor_limit"] > 0
+    assert any(item["relative_path"] == "src/components/Projects.tsx" for item in result["expanded_nodes"])
+    projects = next(item for item in result["candidate_chunks"] if item["chunk_id"] == "projects-component")
+    assert "query_match:projects" in projects["score_reasons"]
+    assert "hub_penalty:6_imports" in projects["score_reasons"]
+    assert projects["candidate_score"] >= max(
+        item["candidate_score"]
+        for item in result["candidate_chunks"]
+        if item["chunk_id"] != "projects-component"
+    )
+
+
 def test_shadow_imported_by_expansion_includes_importing_file(insert_session, add_session_chunks, make_chunk):
     session_id = insert_session()
     chunks = [

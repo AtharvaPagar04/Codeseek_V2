@@ -123,7 +123,7 @@ def run_retrieval_shadow_query(session_id: str, query: str, top_k: int) -> dict:
 
         query_info = process_query(query)
         candidates = search(query_info)
-        graph_shadow = run_graph_shadow_retrieval(session_id, candidates)
+        graph_shadow = run_graph_shadow_retrieval(session_id, candidates, query=query)
         return {
             "normal_candidates": candidates[:top_k],
             "graph_shadow": graph_shadow,
@@ -149,6 +149,7 @@ def build_query_result(case: dict, query_result: dict, *, top_k: int = 10) -> di
     graph_new_symbols = [symbol for symbol in graph_shadow_symbols if symbol not in normal_top_symbols]
     expected_files = _unique_paths(case.get("expected_files") or [])
     expected_symbols = _unique_strings(case.get("expected_symbols") or [])
+    graph_noisy_files = [path for path in graph_new_files if path not in expected_files]
     expected_file_hit_normal = _intersection(expected_files, normal_top_files)
     expected_file_hit_graph_shadow = _intersection(expected_files, graph_shadow_files)
     graph_added_expected_file = [path for path in expected_file_hit_graph_shadow if path not in expected_file_hit_normal]
@@ -183,6 +184,7 @@ def build_query_result(case: dict, query_result: dict, *, top_k: int = 10) -> di
         "graph_shadow_symbols": graph_shadow_symbols,
         "graph_new_files": graph_new_files,
         "graph_new_symbols": graph_new_symbols,
+        "graph_noisy_files": graph_noisy_files,
         "expected_files": expected_files,
         "expected_symbols": expected_symbols,
         "expected_file_hit_normal": expected_file_hit_normal,
@@ -194,6 +196,8 @@ def build_query_result(case: dict, query_result: dict, *, top_k: int = 10) -> di
         "graph_candidate_count": len(candidate_chunks),
         "graph_external_package_count": len(external_packages),
         "graph_unresolved_import_count": len(unresolved_imports),
+        "graph_noisy_file_count": len(graph_noisy_files),
+        "graph_candidate_details": [compact_graph_candidate(item) for item in candidate_chunks],
         "graph_shadow": {
             "enabled": bool(graph_shadow.get("enabled", False)),
             "status": graph_shadow.get("status", ""),
@@ -223,6 +227,7 @@ def build_query_error_result(case: dict, error: str, *, top_k: int = 10) -> dict
         "graph_shadow_symbols": [],
         "graph_new_files": [],
         "graph_new_symbols": [],
+        "graph_noisy_files": [],
         "expected_files": _unique_paths(case.get("expected_files") or []),
         "expected_symbols": _unique_strings(case.get("expected_symbols") or []),
         "expected_file_hit_normal": [],
@@ -234,6 +239,8 @@ def build_query_error_result(case: dict, error: str, *, top_k: int = 10) -> dict
         "graph_candidate_count": 0,
         "graph_external_package_count": 0,
         "graph_unresolved_import_count": 0,
+        "graph_noisy_file_count": 0,
+        "graph_candidate_details": [],
         "graph_shadow": {
             "enabled": True,
             "status": "error",
@@ -277,6 +284,11 @@ def build_summary(results: list[dict]) -> dict:
         for item in results
         for path in item.get("graph_new_files", [])
     )
+    noisy_files = Counter(
+        path
+        for item in results
+        for path in item.get("graph_noisy_files", [])
+    )
     unresolved_imports = Counter(
         str(unresolved.get("raw_reference") or "").strip()
         for item in results
@@ -291,9 +303,12 @@ def build_summary(results: list[dict]) -> dict:
         "queries_where_graph_added_expected_file": sum(1 for item in results if item.get("graph_added_expected_file")),
         "queries_where_graph_added_expected_symbol": sum(1 for item in results if item.get("graph_added_expected_symbol")),
         "queries_where_graph_added_new_file": sum(1 for item in results if item.get("graph_new_files")),
+        "queries_where_graph_added_noisy_file": sum(1 for item in results if item.get("graph_noisy_files")),
         "average_graph_candidate_count": _average(graph_candidate_counts),
+        "average_graph_noisy_file_count": _average([int(item.get("graph_noisy_file_count", 0) or 0) for item in results]),
         "average_unresolved_import_count": _average(unresolved_counts),
         "top_added_files": [{"file": file_path, "count": count} for file_path, count in added_files.most_common(10)],
+        "top_noisy_files": [{"file": file_path, "count": count} for file_path, count in noisy_files.most_common(10)],
         "top_unresolved_imports": [
             {"raw_reference": raw_reference, "count": count}
             for raw_reference, count in unresolved_imports.most_common(10)
@@ -309,9 +324,12 @@ def _empty_summary() -> dict:
         "queries_where_graph_added_expected_file": 0,
         "queries_where_graph_added_expected_symbol": 0,
         "queries_where_graph_added_new_file": 0,
+        "queries_where_graph_added_noisy_file": 0,
         "average_graph_candidate_count": 0.0,
+        "average_graph_noisy_file_count": 0.0,
         "average_unresolved_import_count": 0.0,
         "top_added_files": [],
+        "top_noisy_files": [],
         "top_unresolved_imports": [],
         "classification_counts": {},
     }
@@ -364,6 +382,25 @@ def compact_candidate(item: dict) -> dict:
     return compact
 
 
+def compact_graph_candidate(item: dict) -> dict:
+    compact = compact_candidate(item)
+    for key in ("candidate_score", "selection_rank", "anchor_rank", "hub_import_count"):
+        if key not in item:
+            continue
+        try:
+            compact[key] = round(float(item.get(key) or 0.0), 4)
+        except (TypeError, ValueError):
+            compact[key] = item.get(key)
+    for key in ("expansion_reason", "edge_type", "direction", "selection_reason"):
+        value = item.get(key)
+        if value not in (None, "", [], {}):
+            compact[key] = value
+    reasons = item.get("score_reasons")
+    if isinstance(reasons, list):
+        compact["score_reasons"] = [str(reason) for reason in reasons if str(reason or "").strip()]
+    return compact
+
+
 def render_markdown_report(report: dict) -> str:
     if report.get("session_error"):
         return _render_session_error_markdown(report)
@@ -377,6 +414,7 @@ def render_markdown_report(report: dict) -> str:
         f"- Queries with graph candidates: {summary.get('queries_with_graph_candidates', 0)}",
         f"- Queries where graph added expected file: {summary.get('queries_where_graph_added_expected_file', 0)}",
         f"- Average graph candidate count: {_format_float(summary.get('average_graph_candidate_count', 0.0))}",
+        f"- Average noisy files added: {_format_float(summary.get('average_graph_noisy_file_count', 0.0))}",
         f"- Average unresolved imports: {_format_float(summary.get('average_unresolved_import_count', 0.0))}",
         "",
         "## Query Details",
@@ -391,6 +429,8 @@ def render_markdown_report(report: dict) -> str:
                 f"- Classification: {result.get('classification', '')}",
                 f"- Normal top files: {_format_list(result.get('normal_top_files', []))}",
                 f"- Graph shadow added files: {_format_list(result.get('graph_new_files', []))}",
+                f"- Graph shadow noisy files: {_format_list(result.get('graph_noisy_files', []))}",
+                f"- Graph candidate scores: {_format_graph_candidate_scores(result)}",
                 f"- Expected files hit by normal retrieval: {_format_list(result.get('expected_file_hit_normal', []))}",
                 f"- Expected files added by graph shadow: {_format_list(result.get('graph_added_expected_file', []))}",
                 f"- External packages: {_format_external_packages(result)}",
@@ -652,6 +692,22 @@ def _format_unresolved_imports(result: dict) -> str:
         if str(item.get("raw_reference") or "").strip()
     ]
     return _format_list(_unique_strings(unresolved))
+
+
+def _format_graph_candidate_scores(result: dict) -> str:
+    formatted: list[str] = []
+    for item in list(result.get("graph_candidate_details") or [])[:6]:
+        path = str(item.get("relative_path") or item.get("chunk_id") or "").strip()
+        if not path:
+            continue
+        score = item.get("candidate_score")
+        reasons = item.get("score_reasons") if isinstance(item.get("score_reasons"), list) else []
+        reason_text = ",".join(str(reason) for reason in reasons[:3] if str(reason or "").strip())
+        if reason_text:
+            formatted.append(f"{path} ({score}: {reason_text})")
+        else:
+            formatted.append(f"{path} ({score})")
+    return _format_list(formatted)
 
 
 def parse_args() -> argparse.Namespace:

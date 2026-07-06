@@ -67,7 +67,8 @@ def get_graph_shadow_config() -> dict[str, object]:
     return {
         "enabled": _env_bool("CODESEEK_GRAPH_RETRIEVAL_SHADOW", False),
         "max_anchors": _env_positive_int("CODESEEK_GRAPH_SHADOW_MAX_ANCHORS", 5),
-        "max_expanded": _env_positive_int("CODESEEK_GRAPH_SHADOW_MAX_EXPANDED", 20),
+        "max_expanded": _env_positive_int("CODESEEK_GRAPH_SHADOW_MAX_EXPANDED", 8),
+        "max_per_anchor": _env_positive_int("CODESEEK_GRAPH_SHADOW_MAX_PER_ANCHOR", 4),
         "edge_types": _env_csv("CODESEEK_GRAPH_SHADOW_EDGE_TYPES", ("imports", "defines", "contains")),
     }
 

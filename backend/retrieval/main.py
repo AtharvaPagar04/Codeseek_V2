@@ -1146,7 +1146,7 @@ def _run_query_impl(
     try:
         from retrieval.graph.retrieval import run_graph_shadow_retrieval
 
-        graph_shadow = run_graph_shadow_retrieval(session_id, candidates)
+        graph_shadow = run_graph_shadow_retrieval(session_id, candidates, query=raw_query)
         if graph_shadow.get("enabled") or graph_shadow.get("status") != "disabled":
             meta["graph_shadow"] = graph_shadow
             log_event(
