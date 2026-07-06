@@ -751,6 +751,36 @@ def _build_query_diagnostics(
     graph_shadow = meta.get("graph_shadow") if isinstance(meta.get("graph_shadow"), dict) else {}
     graph_active = meta.get("graph_active") if isinstance(meta.get("graph_active"), dict) else {}
 
+    def _unique_source_paths(items: list[dict]) -> list[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for item in items or []:
+            path = str(item.get("relative_path") or item.get("path") or "").strip()
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            ordered.append(path)
+        return ordered
+
+    rendered_source_paths = _unique_source_paths(list(sources or []))
+    if rendered_source_paths:
+        context_paths = list(source_alignment.get("context_paths") or _unique_source_paths(list(meta.get("reasoning_sources") or [])))
+        if not context_paths:
+            context_paths = list(rendered_source_paths)
+        reasoning_only_paths = [path for path in context_paths if path not in rendered_source_paths]
+        stale_source_cards = [path for path in rendered_source_paths if path not in context_paths]
+        source_alignment = {
+            **source_alignment,
+            "context_paths": context_paths,
+            "source_card_paths": rendered_source_paths,
+            "rendered_paths": rendered_source_paths,
+            "reasoning_only_paths": reasoning_only_paths,
+            "missing_source_cards": [],
+            "stale_source_cards": stale_source_cards,
+            "missing_rendered_cards": [],
+            "aligned": not stale_source_cards,
+        }
+
     def _compact_sources(items: list[dict]) -> list[dict]:
         compacted: list[dict] = []
         for item in items[:6]:
