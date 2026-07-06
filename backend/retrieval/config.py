@@ -26,6 +26,17 @@ def _env_positive_int(name: str, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
+def _env_positive_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
 def _env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -71,6 +82,16 @@ def get_graph_shadow_config() -> dict[str, object]:
         "max_per_anchor": _env_positive_int("CODESEEK_GRAPH_SHADOW_MAX_PER_ANCHOR", 4),
         "edge_types": _env_csv("CODESEEK_GRAPH_SHADOW_EDGE_TYPES", ("imports", "defines", "contains")),
     }
+
+
+def get_graph_active_config() -> dict[str, object]:
+    """Read active graph retrieval settings at runtime. Defaults keep it off."""
+    return {
+        "enabled": _env_bool("CODESEEK_GRAPH_RETRIEVAL_ACTIVE", False),
+        "max_added": _env_positive_int("CODESEEK_GRAPH_ACTIVE_MAX_ADDED", 2),
+        "min_score": _env_positive_float("CODESEEK_GRAPH_ACTIVE_MIN_SCORE", 90.0),
+    }
+
 
 # Display and reasoning source caps (plan §Source Set Size Decision).
 DISPLAY_SOURCES_CAP = _env_int("RETRIEVAL_DISPLAY_SOURCES_CAP", 6)

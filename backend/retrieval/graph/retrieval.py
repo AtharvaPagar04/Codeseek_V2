@@ -8,7 +8,7 @@ import re
 import time
 from typing import Iterable
 
-from retrieval.config import get_collection_name, get_graph_shadow_config
+from retrieval.config import get_collection_name, get_graph_active_config, get_graph_shadow_config
 from retrieval.db import db_cursor
 from retrieval.graph.store import get_graph_build_status
 from retrieval.support.path_utils import normalize_repo_path
@@ -158,6 +158,83 @@ def run_graph_shadow_retrieval(
             started=started,
             error=str(exc),
         )
+
+
+def select_graph_active_candidates(
+    normal_hits: list[dict],
+    graph_shadow: dict | None,
+    *,
+    enabled: bool | None = None,
+    shadow_enabled: bool | None = None,
+    max_added: int | None = None,
+    min_score: float | None = None,
+    hydrate: bool = True,
+) -> tuple[list[dict], dict]:
+    """Select eligible shadow graph chunks for active retrieval injection."""
+    active_config = get_graph_active_config()
+    shadow_config = get_graph_shadow_config()
+    active_enabled = bool(active_config.get("enabled")) if enabled is None else bool(enabled)
+    shadow_is_enabled = bool(shadow_config.get("enabled")) if shadow_enabled is None else bool(shadow_enabled)
+    max_added_value = _positive_int(max_added, int(active_config.get("max_added") or 2))
+    min_score_value = _positive_float(min_score, float(active_config.get("min_score") or 90.0))
+    diagnostics: dict[str, object] = {
+        "enabled": active_enabled,
+        "reason": "",
+        "added_count": 0,
+        "max_added": max_added_value,
+        "min_score": min_score_value,
+        "added_chunks": [],
+        "skipped_count": 0,
+        "skipped_reasons": {},
+    }
+
+    if not active_enabled:
+        diagnostics["reason"] = "disabled"
+        diagnostics["enabled"] = False
+        return [], diagnostics
+    if not shadow_is_enabled:
+        diagnostics["reason"] = "shadow_disabled"
+        return [], diagnostics
+
+    shadow = graph_shadow if isinstance(graph_shadow, dict) else {}
+    status = str(shadow.get("status") or "").strip()
+    if status != "ready":
+        diagnostics["reason"] = f"graph_shadow_{status or 'missing'}"
+        diagnostics["graph_shadow_status"] = status or "missing"
+        return [], diagnostics
+
+    existing_chunk_ids = {
+        str(hit.get("chunk_id") or "").strip()
+        for hit in normal_hits or []
+        if str(hit.get("chunk_id") or "").strip()
+    }
+    selected: list[dict] = []
+    skipped_reasons: dict[str, int] = defaultdict(int)
+
+    for candidate in list(shadow.get("candidate_chunks") or []):
+        reason = _graph_active_skip_reason(candidate, existing_chunk_ids, min_score_value)
+        if reason:
+            skipped_reasons[reason] += 1
+            continue
+        if len(selected) >= max_added_value:
+            skipped_reasons["cap_reached"] += 1
+            continue
+        active_candidate = _graph_active_candidate(candidate, hydrate=hydrate)
+        selected.append(active_candidate)
+        existing_chunk_ids.add(str(active_candidate.get("chunk_id") or "").strip())
+
+    diagnostics["added_count"] = len(selected)
+    diagnostics["added_chunks"] = [_compact_graph_active_candidate(item) for item in selected]
+    skipped_count = sum(skipped_reasons.values())
+    diagnostics["skipped_count"] = skipped_count
+    diagnostics["skipped_reasons"] = dict(sorted(skipped_reasons.items()))
+    if selected:
+        diagnostics["reason"] = "added"
+    elif skipped_count:
+        diagnostics["reason"] = "no_eligible_candidates"
+    else:
+        diagnostics["reason"] = "no_graph_candidates"
+    return selected, diagnostics
 
 
 def build_graph_anchors(
@@ -360,6 +437,110 @@ def summarize_graph_shadow_overlap(normal_hits: list[dict], graph_candidates: di
     }
 
 
+def _graph_active_skip_reason(candidate: dict, existing_chunk_ids: set[str], min_score: float) -> str:
+    chunk_id = str(candidate.get("chunk_id") or "").strip()
+    relative_path = normalize_repo_path(candidate.get("relative_path") or "")
+    if not chunk_id or not relative_path:
+        return "missing_chunk_or_path"
+    if chunk_id in existing_chunk_ids:
+        return "duplicate_chunk_id"
+    if bool(candidate.get("diagnostic_only")):
+        return "diagnostic_only"
+    try:
+        score = float(candidate.get("candidate_score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    if score < float(min_score):
+        return "below_min_score"
+    confidence = str(candidate.get("confidence_tier") or "").strip()
+    if confidence and confidence != "exact_local":
+        return "non_exact_confidence"
+    reasons = [str(reason) for reason in (candidate.get("score_reasons") or [])]
+    if not any(reason.startswith("query_match:") for reason in reasons):
+        return "missing_query_match"
+    return ""
+
+
+def _graph_active_candidate(candidate: dict, *, hydrate: bool = True) -> dict:
+    hydrated = _hydrate_graph_active_candidate(candidate) if hydrate else {}
+    active = dict(hydrated or {})
+    active.update(
+        {
+            key: value
+            for key, value in candidate.items()
+            if value not in (None, "", [], {})
+            and key
+            in {
+                "chunk_id",
+                "relative_path",
+                "symbol_name",
+                "qualified_name",
+                "qualified_symbol",
+                "chunk_type",
+                "node_type",
+                "start_line",
+                "end_line",
+                "signature",
+                "summary",
+                "labels",
+                "source_of_truth",
+            }
+        }
+    )
+    score = float(candidate.get("candidate_score", 0.0) or 0.0)
+    reasons = [str(reason) for reason in (candidate.get("score_reasons") or [])]
+    active["retrieval_source"] = "graph_active"
+    active["support_kind"] = "graph_active"
+    active["source"] = "graph_active"
+    active["expansion_type"] = "primary"
+    active["graph_candidate_score"] = score
+    active["graph_score_reasons"] = reasons
+    active["graph_edge_type"] = candidate.get("edge_type", "")
+    active["graph_anchor_path"] = candidate.get("anchor_relative_path") or candidate.get("scan_relative_path") or ""
+    active["graph_selection_rank"] = candidate.get("selection_rank")
+    active["graph_confidence_tier"] = candidate.get("confidence_tier", "")
+    active.setdefault("fusion_score", 0.0)
+    active["retrieval_score"] = max(
+        float(active.get("retrieval_score", 0.0) or 0.0),
+        min(1.0, score / 100.0),
+    )
+    active.setdefault("exact_retrieval_hit", False)
+    if not active.get("qualified_symbol") and active.get("qualified_name"):
+        active["qualified_symbol"] = active["qualified_name"]
+    if not active.get("chunk_type") and active.get("node_type"):
+        active["chunk_type"] = active["node_type"]
+    return active
+
+
+def _hydrate_graph_active_candidate(candidate: dict) -> dict:
+    chunk_id = str(candidate.get("chunk_id") or "").strip()
+    if not chunk_id:
+        return {}
+    try:
+        from retrieval.search.searcher import _get_client, _scroll_exact_field_matches
+
+        payloads = _scroll_exact_field_matches(_get_client(), get_collection_name(), "chunk_id", chunk_id)
+    except Exception:
+        return {}
+    return dict(payloads[0]) if payloads else {}
+
+
+def _compact_graph_active_candidate(candidate: dict) -> dict:
+    compact: dict[str, object] = {
+        "chunk_id": candidate.get("chunk_id", ""),
+        "relative_path": candidate.get("relative_path", ""),
+        "symbol_name": candidate.get("symbol_name", ""),
+        "retrieval_source": candidate.get("retrieval_source", ""),
+        "graph_candidate_score": candidate.get("graph_candidate_score", 0.0),
+        "graph_score_reasons": list(candidate.get("graph_score_reasons") or []),
+        "graph_edge_type": candidate.get("graph_edge_type", ""),
+        "graph_anchor_path": candidate.get("graph_anchor_path", ""),
+        "graph_selection_rank": candidate.get("graph_selection_rank"),
+        "graph_confidence_tier": candidate.get("graph_confidence_tier", ""),
+    }
+    return {key: value for key, value in compact.items() if value not in (None, "", [], {})}
+
+
 def _empty_shadow_result(
     *,
     enabled: bool,
@@ -502,6 +683,8 @@ def _candidate_chunk_with_expansion(candidate: dict, expanded: dict) -> dict:
         "direction",
         "anchor_node_id",
         "anchor_rank",
+        "anchor_relative_path",
+        "confidence_tier",
         "hub_import_count",
         "fanin_import_count",
     ):
@@ -531,6 +714,7 @@ def _expanded_node_diagnostic(node: dict, edge: dict, anchor: GraphAnchor, scan_
         "direction": direction,
         "expansion_reason": reason,
         "confidence_tier": edge.get("confidence_tier"),
+        "anchor_relative_path": anchor.node.get("relative_path"),
         "anchor_rank": anchor.hit_rank,
     }
 
@@ -1006,6 +1190,14 @@ def _row_to_dict(row) -> dict:
 def _positive_int(value: int | None, default: int) -> int:
     try:
         parsed = int(value or 0)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _positive_float(value: float | None, default: float) -> float:
+    try:
+        parsed = float(value or 0.0)
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default

@@ -1178,6 +1178,39 @@ def _run_query_impl(
         }
     if meta.get("graph_shadow", {}).get("enabled"):
         metrics.add_stage("graph_shadow", started)
+
+    started = time.perf_counter()
+    try:
+        from retrieval.graph.retrieval import select_graph_active_candidates
+
+        active_candidates, graph_active = select_graph_active_candidates(
+            candidates,
+            meta.get("graph_shadow") if isinstance(meta.get("graph_shadow"), dict) else graph_shadow,
+        )
+        meta["graph_active"] = graph_active
+        if active_candidates:
+            candidates = list(candidates) + active_candidates
+            log_event(
+                "retrieval.graph_active",
+                rid,
+                added=graph_active.get("added_count", 0),
+                max_added=graph_active.get("max_added", 0),
+                min_score=graph_active.get("min_score", 0),
+            )
+    except Exception as exc:
+        meta["graph_active"] = {
+            "enabled": True,
+            "reason": "error",
+            "error": str(exc),
+            "added_count": 0,
+            "max_added": 0,
+            "min_score": 0,
+            "added_chunks": [],
+            "skipped_count": 0,
+            "skipped_reasons": {},
+        }
+    if meta.get("graph_active", {}).get("enabled"):
+        metrics.add_stage("graph_active", started)
     
     # Phase 1: Capture top 20 raw candidates
     top_raw = []

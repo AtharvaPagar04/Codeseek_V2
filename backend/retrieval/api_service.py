@@ -749,6 +749,7 @@ def _build_query_diagnostics(
     retrieval_targeting = meta.get("retrieval_targeting") if isinstance(meta.get("retrieval_targeting"), dict) else {}
     source_alignment = meta.get("source_alignment") if isinstance(meta.get("source_alignment"), dict) else {}
     graph_shadow = meta.get("graph_shadow") if isinstance(meta.get("graph_shadow"), dict) else {}
+    graph_active = meta.get("graph_active") if isinstance(meta.get("graph_active"), dict) else {}
 
     def _compact_sources(items: list[dict]) -> list[dict]:
         compacted: list[dict] = []
@@ -787,6 +788,8 @@ def _build_query_diagnostics(
 
     if graph_shadow:
         diagnostics["graph_shadow"] = graph_shadow
+    if graph_active:
+        diagnostics["graph_active"] = graph_active
 
     validation = meta.get("validation")
     if isinstance(validation, dict):

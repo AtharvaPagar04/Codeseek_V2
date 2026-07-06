@@ -4,6 +4,7 @@ from retrieval.graph.builder import rebuild_session_hierarchy_graph
 from retrieval.graph.retrieval import (
     build_graph_anchors,
     run_graph_shadow_retrieval,
+    select_graph_active_candidates,
     summarize_graph_shadow_overlap,
 )
 from retrieval.graph.store import set_graph_build_status
@@ -475,6 +476,16 @@ def test_query_diagnostics_exposes_graph_shadow_payload(graph_db):
                     "edge_types_used": ["imports"],
                 },
             },
+            "graph_active": {
+                "enabled": True,
+                "reason": "added",
+                "added_count": 1,
+                "max_added": 2,
+                "min_score": 90,
+                "added_chunks": [{"chunk_id": "helper-chunk"}],
+                "skipped_count": 0,
+                "skipped_reasons": {},
+            },
         },
         sources=[],
         token_count=0,
@@ -484,3 +495,171 @@ def test_query_diagnostics_exposes_graph_shadow_payload(graph_db):
 
     assert diagnostics["graph_shadow"]["status"] == "ready"
     assert diagnostics["graph_shadow"]["candidate_chunks"][0]["chunk_id"] == "helper-chunk"
+    assert diagnostics["graph_active"]["enabled"] is True
+    assert diagnostics["graph_active"]["added_chunks"][0]["chunk_id"] == "helper-chunk"
+
+
+def _active_shadow(candidates: list[dict]) -> dict:
+    return {
+        "enabled": True,
+        "status": "ready",
+        "candidate_chunks": candidates,
+    }
+
+
+def _active_candidate(
+    chunk_id: str,
+    *,
+    path: str = "src/components/Projects.tsx",
+    score: float = 118.0,
+    reasons: list[str] | None = None,
+    diagnostic_only: bool = False,
+    confidence_tier: str = "exact_local",
+    selection_rank: int = 1,
+) -> dict:
+    return {
+        "chunk_id": chunk_id,
+        "relative_path": path,
+        "symbol_name": "Projects",
+        "qualified_name": f"{path}::Projects",
+        "chunk_type": "component",
+        "candidate_score": score,
+        "score_reasons": reasons or ["edge:outgoing_import", "query_match:projects"],
+        "diagnostic_only": diagnostic_only,
+        "confidence_tier": confidence_tier,
+        "edge_type": "imports",
+        "anchor_relative_path": "src/app/page.tsx",
+        "selection_rank": selection_rank,
+    }
+
+
+def test_graph_active_disabled_leaves_candidates_unchanged():
+    normal_hits = [{"chunk_id": "page-file", "relative_path": "src/app/page.tsx"}]
+    original_hits = copy.deepcopy(normal_hits)
+
+    active_candidates, diagnostics = select_graph_active_candidates(
+        normal_hits,
+        _active_shadow([_active_candidate("projects-component")]),
+        enabled=False,
+        shadow_enabled=True,
+        hydrate=False,
+    )
+
+    assert normal_hits == original_hits
+    assert active_candidates == []
+    assert diagnostics["enabled"] is False
+    assert diagnostics["reason"] == "disabled"
+
+
+def test_graph_active_injects_eligible_query_matched_candidate():
+    normal_hits = [{"chunk_id": "page-file", "relative_path": "src/app/page.tsx"}]
+
+    active_candidates, diagnostics = select_graph_active_candidates(
+        normal_hits,
+        _active_shadow([_active_candidate("projects-component")]),
+        enabled=True,
+        shadow_enabled=True,
+        min_score=90,
+        hydrate=False,
+    )
+
+    assert [item["chunk_id"] for item in normal_hits] == ["page-file"]
+    assert len(active_candidates) == 1
+    added = active_candidates[0]
+    assert added["chunk_id"] == "projects-component"
+    assert added["retrieval_source"] == "graph_active"
+    assert added["support_kind"] == "graph_active"
+    assert added["graph_candidate_score"] == 118.0
+    assert added["graph_score_reasons"] == ["edge:outgoing_import", "query_match:projects"]
+    assert added["graph_edge_type"] == "imports"
+    assert added["graph_anchor_path"] == "src/app/page.tsx"
+    assert added["graph_selection_rank"] == 1
+    assert diagnostics["enabled"] is True
+    assert diagnostics["reason"] == "added"
+    assert diagnostics["added_count"] == 1
+    assert diagnostics["added_chunks"][0]["chunk_id"] == "projects-component"
+
+
+def test_graph_active_requires_shadow_flag_enabled():
+    active_candidates, diagnostics = select_graph_active_candidates(
+        [{"chunk_id": "page-file", "relative_path": "src/app/page.tsx"}],
+        _active_shadow([_active_candidate("projects-component")]),
+        enabled=True,
+        shadow_enabled=False,
+        hydrate=False,
+    )
+
+    assert active_candidates == []
+    assert diagnostics["reason"] == "shadow_disabled"
+
+
+def test_graph_active_cap_limits_added_candidates():
+    active_candidates, diagnostics = select_graph_active_candidates(
+        [{"chunk_id": "page-file", "relative_path": "src/app/page.tsx"}],
+        _active_shadow(
+            [
+                _active_candidate("projects-component", selection_rank=1),
+                _active_candidate("hero-component", path="src/components/Hero.tsx", selection_rank=2),
+                _active_candidate("about-component", path="src/components/About.tsx", selection_rank=3),
+            ]
+        ),
+        enabled=True,
+        shadow_enabled=True,
+        max_added=2,
+        hydrate=False,
+    )
+
+    assert [item["chunk_id"] for item in active_candidates] == ["projects-component", "hero-component"]
+    assert diagnostics["added_count"] == 2
+    assert diagnostics["skipped_reasons"]["cap_reached"] == 1
+
+
+def test_graph_active_threshold_blocks_low_score_candidate():
+    active_candidates, diagnostics = select_graph_active_candidates(
+        [{"chunk_id": "page-file", "relative_path": "src/app/page.tsx"}],
+        _active_shadow([_active_candidate("projects-component", score=89.5)]),
+        enabled=True,
+        shadow_enabled=True,
+        min_score=90,
+        hydrate=False,
+    )
+
+    assert active_candidates == []
+    assert diagnostics["reason"] == "no_eligible_candidates"
+    assert diagnostics["skipped_reasons"]["below_min_score"] == 1
+
+
+def test_graph_active_blocks_diagnostic_only_duplicate_and_missing_query_match():
+    active_candidates, diagnostics = select_graph_active_candidates(
+        [{"chunk_id": "page-file", "relative_path": "src/app/page.tsx"}],
+        _active_shadow(
+            [
+                _active_candidate("about-component", diagnostic_only=True),
+                _active_candidate("page-file"),
+                _active_candidate("hero-component", reasons=["edge:outgoing_import"]),
+            ]
+        ),
+        enabled=True,
+        shadow_enabled=True,
+        min_score=90,
+        hydrate=False,
+    )
+
+    assert active_candidates == []
+    assert diagnostics["skipped_reasons"]["diagnostic_only"] == 1
+    assert diagnostics["skipped_reasons"]["duplicate_chunk_id"] == 1
+    assert diagnostics["skipped_reasons"]["missing_query_match"] == 1
+
+
+def test_graph_active_blocks_non_exact_confidence_when_present():
+    active_candidates, diagnostics = select_graph_active_candidates(
+        [{"chunk_id": "page-file", "relative_path": "src/app/page.tsx"}],
+        _active_shadow([_active_candidate("package-node", confidence_tier="external_package")]),
+        enabled=True,
+        shadow_enabled=True,
+        min_score=90,
+        hydrate=False,
+    )
+
+    assert active_candidates == []
+    assert diagnostics["skipped_reasons"]["non_exact_confidence"] == 1
