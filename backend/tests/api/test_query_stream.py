@@ -22,7 +22,7 @@ def test_query_stream_success():
     mock_provider = {"provider": "openai", "api_key": "secret", "model": "gpt-4"}
     mock_session = {"id": "session-123", "repo_root": "/tmp", "collection": "col"}
     
-    def mock_run_query(query, memory, request_id, return_meta, provider_config, stream_handler=None, abort_event=None):
+    def mock_run_query(query, memory, request_id, return_meta, provider_config, stream_handler=None, abort_event=None, **kwargs):
         if stream_handler:
             stream_handler.on_status("Retrieving...")
             stream_handler.on_delta("Hello ")
@@ -120,7 +120,7 @@ def test_query_stream_abort():
     
     aborted_captured = False
     
-    def mock_run_query(query, memory, request_id, return_meta, provider_config, stream_handler=None, abort_event=None):
+    def mock_run_query(query, memory, request_id, return_meta, provider_config, stream_handler=None, abort_event=None, **kwargs):
         nonlocal aborted_captured
         if stream_handler:
             stream_handler.on_status("Retrieving...")

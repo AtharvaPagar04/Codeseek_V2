@@ -12,6 +12,41 @@ from rag_ingestion.stages import storage as storage_stage
 from retrieval import session_indexer
 
 
+def _test_embedding_metadata() -> dict:
+    from retrieval.support.embedding_provider import current_embedding_metadata
+    return current_embedding_metadata()
+
+
+def _stamp_session_embedding_metadata(session_id: str) -> None:
+    metadata = _test_embedding_metadata()
+    with db_cursor() as (conn, cursor):
+        cursor.execute(
+            """
+            UPDATE repo_sessions
+            SET embedding_provider = ?,
+                embedding_base_url = ?,
+                embedding_model = ?,
+                embedding_dimensions = ?,
+                embedding_config_hash = ?
+            WHERE id = ?
+            """,
+            (
+                metadata["embedding_provider"],
+                metadata["embedding_base_url"],
+                metadata["embedding_model"],
+                metadata["embedding_dimensions"],
+                metadata["embedding_config_hash"],
+                session_id,
+            ),
+        )
+
+
+def _fake_embed_chunks(chunks, counters, **kwargs):
+    counters.embeddings_generated = len(chunks)
+    counters.embedding_provider_metadata = _test_embedding_metadata()
+    return chunks
+
+
 def test_incremental_reindex_execution(monkeypatch, tmp_path: Path):
     db_path = tmp_path / "test_codeseek.sqlite3"
     monkeypatch.setenv("CODESEEK_DB_PATH", str(db_path))
@@ -81,8 +116,12 @@ def test_incremental_reindex_execution(monkeypatch, tmp_path: Path):
             ),
         )
 
+    _stamp_session_embedding_metadata("session-a")
+    _stamp_session_embedding_metadata("session-b")
+
     # Mock pipeline operations requiring external services
-    monkeypatch.setattr(pipeline_main, "embed_chunks", lambda chunks, counters: chunks)
+    monkeypatch.setattr(pipeline_main, "embed_chunks", _fake_embed_chunks)
+    monkeypatch.setattr("rag_ingestion.stages.embedder.embed_chunks", _fake_embed_chunks)
     monkeypatch.setattr("retrieval.support.isolation.validate_collection_binding", lambda *a, **kw: None)
     monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda *args, **kwargs: commit_sha)
 
@@ -270,6 +309,8 @@ def test_incremental_indexing_detailed_behaviors(monkeypatch, tmp_path: Path):
             ),
         )
 
+    _stamp_session_embedding_metadata("sess-detailed")
+
     # Insert files into DB session_files
     unchanged_rec = upsert_session_file(
         session_id="sess-detailed",
@@ -312,7 +353,8 @@ def test_incremental_indexing_detailed_behaviors(monkeypatch, tmp_path: Path):
     ])
 
     # Mock pipeline operations
-    monkeypatch.setattr(pipeline_main, "embed_chunks", lambda chunks, counters: chunks)
+    monkeypatch.setattr(pipeline_main, "embed_chunks", _fake_embed_chunks)
+    monkeypatch.setattr("rag_ingestion.stages.embedder.embed_chunks", _fake_embed_chunks)
     monkeypatch.setattr("retrieval.support.isolation.validate_collection_binding", lambda *a, **kw: None)
     monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda *args, **kwargs: commit_sha)
 
@@ -435,6 +477,8 @@ def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
             ),
         )
 
+    _stamp_session_embedding_metadata("sess-recovery")
+
     # Insert files into DB session_files
     unchanged_rec = upsert_session_file(
         session_id="sess-recovery",
@@ -481,7 +525,7 @@ def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
     (repo_dir / "added.py").write_text("print('added')", encoding="utf-8")
 
     # Mock default pipeline operations
-    monkeypatch.setattr("rag_ingestion.stages.embedder.embed_chunks", lambda chunks, counters: chunks)
+    monkeypatch.setattr("rag_ingestion.stages.embedder.embed_chunks", _fake_embed_chunks)
     monkeypatch.setattr("retrieval.support.isolation.validate_collection_binding", lambda *a, **kw: None)
     monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda *args, **kwargs: commit_sha)
 
@@ -651,4 +695,3 @@ def test_incremental_indexing_failure_recovery(monkeypatch, tmp_path: Path):
     # 8. Full Index latest remains available after failed incremental indexing
     preview = session_indexer.get_session_index_preview("sess-recovery", "user-123")
     assert preview["can_index_latest"] is True
-

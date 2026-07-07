@@ -748,6 +748,38 @@ def _build_query_diagnostics(
     memory_diagnostics = meta.get("memory_diagnostics") if isinstance(meta.get("memory_diagnostics"), dict) else {}
     retrieval_targeting = meta.get("retrieval_targeting") if isinstance(meta.get("retrieval_targeting"), dict) else {}
     source_alignment = meta.get("source_alignment") if isinstance(meta.get("source_alignment"), dict) else {}
+    graph_shadow = meta.get("graph_shadow") if isinstance(meta.get("graph_shadow"), dict) else {}
+    graph_active = meta.get("graph_active") if isinstance(meta.get("graph_active"), dict) else {}
+
+    def _unique_source_paths(items: list[dict]) -> list[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for item in items or []:
+            path = str(item.get("relative_path") or item.get("path") or "").strip()
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            ordered.append(path)
+        return ordered
+
+    rendered_source_paths = _unique_source_paths(list(sources or []))
+    if rendered_source_paths:
+        context_paths = list(source_alignment.get("context_paths") or _unique_source_paths(list(meta.get("reasoning_sources") or [])))
+        if not context_paths:
+            context_paths = list(rendered_source_paths)
+        reasoning_only_paths = [path for path in context_paths if path not in rendered_source_paths]
+        stale_source_cards = [path for path in rendered_source_paths if path not in context_paths]
+        source_alignment = {
+            **source_alignment,
+            "context_paths": context_paths,
+            "source_card_paths": rendered_source_paths,
+            "rendered_paths": rendered_source_paths,
+            "reasoning_only_paths": reasoning_only_paths,
+            "missing_source_cards": [],
+            "stale_source_cards": stale_source_cards,
+            "missing_rendered_cards": [],
+            "aligned": not stale_source_cards,
+        }
 
     def _compact_sources(items: list[dict]) -> list[dict]:
         compacted: list[dict] = []
@@ -783,6 +815,11 @@ def _build_query_diagnostics(
         diagnostics["memory"] = dict(memory_diagnostics.get("memory") or {})
         diagnostics["rewrite"] = dict(memory_diagnostics.get("rewrite") or {})
         diagnostics["retrieval"] = dict(memory_diagnostics.get("retrieval") or {})
+
+    if graph_shadow:
+        diagnostics["graph_shadow"] = graph_shadow
+    if graph_active:
+        diagnostics["graph_active"] = graph_active
 
     validation = meta.get("validation")
     if isinstance(validation, dict):
@@ -908,6 +945,7 @@ def _query_impl(
                 request_id=request_id,
                 return_meta=True,
                 provider_config=provider_config,
+                session_id=session["id"] if session else None,
             )
         if session:
             diagnostics_data = None
@@ -1182,6 +1220,7 @@ async def query_stream_v1(
                     request_id=request_id,
                     return_meta=True,
                     provider_config=provider_config,
+                    session_id=session["id"] if session else None,
                     stream_handler=QueueStreamHandler(),
                     abort_event=abort_event,
                 )
@@ -2404,5 +2443,15 @@ def query(
 ) -> dict:
     return _query_impl(body, request, authorization, x_request_id, session_token)
 
+
+from retrieval.graph.api import register_graph_routes
+
+register_graph_routes(
+    v1,
+    require_auth_user=_require_auth_user,
+    get_session=get_session,
+    session_visible_to_user=_session_visible_to_user,
+    auth_cookie_name=AUTH_SESSION_COOKIE,
+)
 
 app.include_router(v1)
