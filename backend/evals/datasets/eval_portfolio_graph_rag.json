@@ -1,0 +1,216 @@
+[
+  {
+    "id": "owner-degree-university-cgpa",
+    "query": "Who owns this portfolio, what degree is listed, which university is shown, and what is the current CGPA?",
+    "expected_answer_notes": "Atharva Pagar. B.Tech in Computer Science and Engineering (AI & ML). VIT Bhopal University. CGPA 7.73.",
+    "expected_source_paths": [
+      "src/lib/data.ts"
+    ],
+    "required_answer_substrings": [
+      "Atharva Pagar",
+      "B.Tech",
+      "Computer Science",
+      "AI & ML",
+      "VIT Bhopal University",
+      "7.73"
+    ],
+    "forbidden_answer_substrings": [
+      "7.75"
+    ],
+    "validation_focus": "Exact value grounding and source retrieval for owner/profile facts."
+  },
+  {
+    "id": "homepage-sections-order",
+    "query": "What sections does the homepage render, and in what order?",
+    "expected_answer_notes": "StarsCanvas, Navbar, Hero, About, Skills, Experience, Projects, Education, Certifications, Contact, Footer.",
+    "expected_source_paths": [
+      "src/app/page.tsx"
+    ],
+    "required_answer_substrings": [
+      "StarsCanvas",
+      "Navbar",
+      "Hero",
+      "About",
+      "Skills",
+      "Experience",
+      "Projects",
+      "Education",
+      "Certifications",
+      "Contact",
+      "Footer"
+    ],
+    "forbidden_answer_substrings": [],
+    "validation_focus": "Exact source retrieval and ordered rendering answer quality."
+  },
+  {
+    "id": "hero-typewriter",
+    "query": "What roles are animated in the hero tagline, and how does the typewriter timing work?",
+    "expected_answer_notes": "Roles: GenAI Engineer, AI/ML Enthusiast, Problem Solver, Open-Source Contributor. Timing: type every 80 ms, pause 1800 ms, delete every 40 ms, cycle modulo role count.",
+    "expected_source_paths": [
+      "src/lib/data.ts",
+      "src/components/Hero.tsx"
+    ],
+    "required_answer_substrings": [
+      "GenAI Engineer",
+      "AI/ML Enthusiast",
+      "Problem Solver",
+      "Open-Source Contributor",
+      "80",
+      "1800",
+      "40"
+    ],
+    "forbidden_answer_substrings": [],
+    "validation_focus": "Multi-source grounding across data and rendering logic."
+  },
+  {
+    "id": "navbar-active-section-scroll",
+    "query": "How does the navbar determine the active section while scrolling?",
+    "expected_answer_notes": "Navbar listens to scroll, marks nav scrolled when window.scrollY > 20, checks sections in reverse order, sets active when window.scrollY >= el.offsetTop - 120, includes contact in scan even if contact is not in desktop link list.",
+    "expected_source_paths": [
+      "src/components/Navbar.tsx"
+    ],
+    "required_answer_substrings": [
+      "scroll",
+      "window.scrollY",
+      "20",
+      "reverse",
+      "offsetTop",
+      "120",
+      "contact"
+    ],
+    "forbidden_answer_substrings": [],
+    "validation_focus": "Exact component behavior and numeric grounding."
+  },
+  {
+    "id": "ai-retrieval-skills",
+    "query": "What AI/GenAI and Retrieval/Vector Search skills are listed?",
+    "expected_answer_notes": "AI/GenAI: RAG systems, LLM application development, Prompt engineering, LangChain, LlamaIndex, Ollama, Hugging Face Transformers. Retrieval/Vector Search: Qdrant, Embeddings, Hybrid search (BM25 + RRF), Semantic search, Retrieval evaluation.",
+    "expected_source_paths": [
+      "src/lib/data.ts"
+    ],
+    "required_answer_substrings": [
+      "RAG systems",
+      "LLM application development",
+      "Prompt engineering",
+      "LangChain",
+      "LlamaIndex",
+      "Ollama",
+      "Hugging Face Transformers",
+      "Qdrant",
+      "Embeddings",
+      "Hybrid search",
+      "BM25",
+      "RRF",
+      "Semantic search",
+      "Retrieval evaluation"
+    ],
+    "forbidden_answer_substrings": [],
+    "validation_focus": "Exact list grounding for skill taxonomy."
+  },
+  {
+    "id": "project-count-and-names",
+    "query": "How many projects are currently defined, and what are their names?",
+    "expected_answer_notes": "6 projects: CodeSeek - Repository-Aware RAG Coding Assistant; RL Trading Agent - LSTM/PPO Position-Sizing System; Grid Trading Bot V3; Virtual Pen - Gesture-Based Drawing Tool; EventSnap - AI-Powered Event Photo Finder; VeggieMap - Hyperlocal Vendor Finder.",
+    "expected_source_paths": [
+      "src/lib/data.ts"
+    ],
+    "required_answer_substrings": [
+      "6",
+      "CodeSeek",
+      "RL Trading Agent",
+      "Grid Trading Bot V3",
+      "Virtual Pen",
+      "EventSnap",
+      "VeggieMap"
+    ],
+    "forbidden_answer_substrings": [
+      "5 projects",
+      "five projects"
+    ],
+    "validation_focus": "Exact count and project-name grounding."
+  },
+  {
+    "id": "codeseek-rag-project-features",
+    "query": "Which project is the repository-aware RAG assistant, and what retrieval/evaluation features does it claim?",
+    "expected_answer_notes": "CodeSeek is the repository-aware RAG assistant. It claims local-first repository-aware RAG, Qdrant vector search, in-process BM25, Reciprocal Rank Fusion, 10 intent families, two-layer source attribution, and a retrieval-evaluation harness using DeepEval and pytest.",
+    "expected_source_paths": [
+      "src/lib/data.ts"
+    ],
+    "required_answer_substrings": [
+      "CodeSeek",
+      "repository-aware",
+      "Qdrant",
+      "BM25",
+      "Reciprocal Rank Fusion",
+      "10 intent",
+      "two-layer",
+      "DeepEval",
+      "pytest"
+    ],
+    "forbidden_answer_substrings": [],
+    "validation_focus": "Exact project feature grounding and retrieval terminology."
+  },
+  {
+    "id": "quant-trading-projects",
+    "query": "Which projects are in the quant/trading category, and what distinguishes each one?",
+    "expected_answer_notes": "RL Trading Agent and Grid Trading Bot V3. RL Trading Agent: offline RL research system using LSTM actor-critic PPO for continuous long/short position sizing from crypto market sequences. Grid Trading Bot V3: production-oriented algorithmic trading platform with Python/FastAPI runtime, real-time telemetry, paper-trading engine, recovery-safe persistence, and Next.js dashboard.",
+    "expected_source_paths": [
+      "src/lib/data.ts"
+    ],
+    "required_answer_substrings": [
+      "RL Trading Agent",
+      "Grid Trading Bot V3",
+      "LSTM",
+      "PPO",
+      "long/short",
+      "crypto",
+      "Python",
+      "FastAPI",
+      "telemetry",
+      "paper-trading",
+      "Next.js"
+    ],
+    "forbidden_answer_substrings": [],
+    "validation_focus": "Exact category grouping and project distinction grounding."
+  },
+  {
+    "id": "project-code-live-links",
+    "query": "How do project cards decide whether to render Code and Live links?",
+    "expected_answer_notes": "Projects maps over projects. Code link renders only when p.code exists and is not \"#\". Live link renders only when p.live exists and is not \"#\".",
+    "expected_source_paths": [
+      "src/components/Projects.tsx"
+    ],
+    "required_answer_substrings": [
+      "projects",
+      "p.code",
+      "#",
+      "p.live",
+      "Code",
+      "Live"
+    ],
+    "forbidden_answer_substrings": [],
+    "validation_focus": "Exact component conditional rendering logic."
+  },
+  {
+    "id": "contact-emailjs-error-handling",
+    "query": "How does the contact form send messages, and when does it show an error?",
+    "expected_answer_notes": "Contact uses EmailJS sendForm with NEXT_PUBLIC_EMAILJS_SERVICE_ID, NEXT_PUBLIC_EMAILJS_TEMPLATE_ID, and NEXT_PUBLIC_EMAILJS_PUBLIC_KEY. If any env var is missing, it sets error status before sending. On success it shows success, resets form, returns to idle after 5 seconds; on failure it shows error.",
+    "expected_source_paths": [
+      "src/components/Contact.tsx"
+    ],
+    "required_answer_substrings": [
+      "EmailJS",
+      "sendForm",
+      "NEXT_PUBLIC_EMAILJS_SERVICE_ID",
+      "NEXT_PUBLIC_EMAILJS_TEMPLATE_ID",
+      "NEXT_PUBLIC_EMAILJS_PUBLIC_KEY",
+      "missing",
+      "success",
+      "reset",
+      "5 seconds",
+      "error"
+    ],
+    "forbidden_answer_substrings": [],
+    "validation_focus": "Exact form integration and error handling behavior."
+  }
+]

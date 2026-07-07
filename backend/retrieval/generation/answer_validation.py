@@ -114,6 +114,21 @@ def validate_generated_answer(
     if response_mode not in {"code_snippet", "source_location"}:
         cleaned_answer = _strip_manual_sources_footer(cleaned_answer)
 
+    if response_mode == "portfolio_grounded":
+        return {
+            "valid": not cleaned_reasons,
+            "repaired_answer": cleaned_answer.strip(),
+            "repaired_sources": final_sources or allowed_sources,
+            "reasons": cleaned_reasons,
+            "numeric_grounding": {
+                "enabled": False,
+                "claims": [],
+                "verified_values": [],
+                "failed_values": [],
+                "numeric_grounding_failed": False,
+            },
+        }
+
     if response_mode == "code_snippet":
         return _validate_code_snippet(
             cleaned_answer=cleaned_answer,

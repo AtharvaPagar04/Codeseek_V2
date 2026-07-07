@@ -1533,6 +1533,24 @@ def has_strong_source_location_evidence(
     loc_terms = ("where", "file", "location", "folder", "directory", "path", "impl", "defined", "declared", "initialized", "source of", "source code", "happens")
     if not any(t in q_lower for t in loc_terms):
         return False
+    factual_markers = (
+        "how many",
+        "what ",
+        "which ",
+        "who ",
+        "list",
+        "listed",
+        "count",
+        "names",
+        "current cgpa",
+        "features",
+        "category",
+    )
+    explicit_location_markers = ("where", "file", "location", "folder", "directory", "path")
+    if any(marker in q_lower for marker in factual_markers) and not any(
+        marker in q_lower for marker in explicit_location_markers
+    ):
+        return False
 
     from pathlib import Path
     top = display_sources[0]

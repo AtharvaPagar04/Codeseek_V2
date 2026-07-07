@@ -229,6 +229,28 @@ def _unique_paths(items: list[object]) -> list[str]:
     return ordered
 
 
+def _merge_sources_by_key(primary: list[dict], secondary: list[dict]) -> list[dict]:
+    merged: list[dict] = []
+    seen: set[tuple[str, str, int, int, str]] = set()
+
+    def key(item: dict) -> tuple[str, str, int, int, str]:
+        return (
+            str(item.get("relative_path", "")).strip(),
+            str(item.get("symbol_name", "")).strip(),
+            int(item.get("start_line", 0) or 0),
+            int(item.get("end_line", 0) or 0),
+            str(item.get("expansion_type", "")).strip(),
+        )
+
+    for item in list(primary or []) + list(secondary or []):
+        source_key = key(item)
+        if not source_key[0] or source_key in seen:
+            continue
+        seen.add(source_key)
+        merged.append(item)
+    return merged
+
+
 def _collect_retrieval_targeting_diagnostics(
     *,
     query_info: dict,
@@ -840,6 +862,9 @@ def post_process_answer_and_sources(
     is_flow_query = "flow" in q_lower or "pipeline" in q_lower or "retrieval pipeline" in q_lower
 
     final_sources = list(sources)
+    if any(str(src.get("support_kind", "")).strip() == "portfolio_grounded" for src in final_sources):
+        return answer.strip(), _dedupe_sources(final_sources)
+
     if implementation_sources and not explicit_request and not is_flow_query:
         final_sources = implementation_sources
         
@@ -1238,6 +1263,10 @@ def _run_query_impl(
             meta.get("graph_shadow") if isinstance(meta.get("graph_shadow"), dict) else graph_shadow,
         )
         meta["graph_active"] = graph_active
+        query_info["graph_active"] = {
+            **graph_active,
+            "added_paths": _unique_paths(list(graph_active.get("added_chunks") or [])),
+        }
         if active_candidates:
             candidates = list(candidates) + active_candidates
             log_event(
@@ -1652,6 +1681,92 @@ def _run_query_impl(
         if return_meta:
             return answer, shown_sources, token_count, meta
         return answer, shown_sources, token_count
+
+    from retrieval.generation.exact_value_grounding import build_portfolio_grounded_answer
+
+    portfolio_grounded = build_portfolio_grounded_answer(
+        raw_query,
+        repo_root=get_repo_root(),
+        evidence_sources=list(shown_sources) + list(reasoning_sources) + list(expanded) + list(candidates),
+        graph_shadow=meta.get("graph_shadow") if isinstance(meta.get("graph_shadow"), dict) else None,
+    )
+    if portfolio_grounded:
+        started = time.perf_counter()
+        answer = str(portfolio_grounded["answer"])
+        response_sources = list(portfolio_grounded["sources"])
+        reasoning_sources = _merge_sources_by_key(reasoning_sources, response_sources)
+        display_sources = list(response_sources)
+        shown_sources = list(response_sources)
+        meta["portfolio_grounding"] = dict(portfolio_grounded.get("diagnostics") or {})
+        meta["display_sources"] = list(display_sources)
+        meta["reasoning_sources"] = list(reasoning_sources)
+        meta["source_alignment"] = _collect_source_alignment_diagnostics(
+            display_sources=display_sources,
+            reasoning_sources=reasoning_sources,
+            rendered_sources=shown_sources,
+        )
+        metrics.add_stage("portfolio_grounded_answer", started)
+        cited_entities = extract_cited_entities(shown_sources)
+        response_mode = "portfolio_grounded"
+        memory.add(
+            raw_query,
+            answer,
+            resolved_query=_resolved_query_text(query_info, raw_query),
+            entities=cited_entities,
+            primary_intent=primary_intent,
+        )
+        meta["validation"] = getattr(memory, "last_validation", None)
+        meta.update(
+            {
+                "stage_latency_ms": metrics.stage_latency_ms,
+                "total_latency_ms": metrics.total_ms(),
+                "backend_latency_ms": metrics.total_ms(),
+                "provider_latency_ms": 0,
+                "errors": metrics.errors,
+                "response_mode": response_mode,
+                "evidence_confidence": evidence_confidence,
+            }
+        )
+        if evaluation is not None:
+            evaluation["response_mode"] = response_mode
+            evaluation["display_sources"] = list(display_sources)
+            evaluation["reasoning_sources"] = list(reasoning_sources)
+            evaluation["answer_context"] = ""
+            evaluation["answer_context_blocks"] = []
+        log_event(
+            "retrieval.request.end",
+            rid,
+            status="ok",
+            stage_latency_ms=metrics.stage_latency_ms,
+            total_latency_ms=metrics.total_ms(),
+            candidates=len(candidates),
+            expanded=len(expanded),
+            shown_sources=len(shown_sources),
+            source_filter=meta["source_filter"],
+            response_mode=response_mode,
+            evidence_confidence=evidence_confidence["level"],
+        )
+        _write_trace_for_query(
+            raw_query=raw_query,
+            answer=answer,
+            response_sources=shown_sources,
+            expanded=expanded,
+            memory=memory,
+            metrics=metrics,
+            primary_intent=primary_intent,
+            query_info=query_info,
+        )
+        if stream_handler:
+            stream_handler.on_status("Generating answer...")
+            for i in range(0, len(answer), 8):
+                if abort_event and abort_event.is_set():
+                    break
+                stream_handler.on_delta(answer[i:i+8])
+                time.sleep(0.01)
+        if return_meta:
+            return answer, shown_sources, token_count, meta
+        return answer, shown_sources, token_count
+
     # Build chunk list for deterministic answer paths: filtered to shown (display) sources only.
     allowed_keys = {
         (
@@ -2475,6 +2590,22 @@ def _run_query_impl(
             )
             if not already_present:
                 response_sources.append(support_source)
+            if not any(
+                (
+                    src.get("relative_path", ""),
+                    src.get("symbol_name", ""),
+                    int(src.get("start_line", 0)),
+                    int(src.get("end_line", 0)),
+                )
+                == (
+                    support_source["relative_path"],
+                    support_source["symbol_name"],
+                    support_source["start_line"],
+                    support_source["end_line"],
+                )
+                for src in reasoning_sources
+            ):
+                reasoning_sources.append(support_source)
             extra_context_blocks.append(str(support["context_block"]))
             support_blocks.append(
                 {
@@ -2572,6 +2703,14 @@ def _run_query_impl(
         response_sources,
         raw_query,
         primary_intent=primary_intent,
+    )
+    final_reasoning_sources = _merge_sources_by_key(reasoning_sources, response_sources)
+    meta["display_sources"] = list(response_sources)
+    meta["reasoning_sources"] = list(final_reasoning_sources)
+    meta["source_alignment"] = _collect_source_alignment_diagnostics(
+        display_sources=response_sources,
+        reasoning_sources=final_reasoning_sources,
+        rendered_sources=response_sources,
     )
     # Prepend evidence-quality banner when confidence is weak or partial.
     conf_level = evidence_confidence["level"]
