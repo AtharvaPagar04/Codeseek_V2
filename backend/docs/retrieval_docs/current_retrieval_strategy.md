@@ -601,27 +601,32 @@ Chunks are ordered by:
 
 Expansion tier priority:
 
-### 10.3 Source-card alignment
-
-After two-layer source selection, `retrieval/main.py` now aligns visible source cards with the broader reasoning set for the most important cases:
-
-- primary reasoning chunks
-- Tier 0 exact hits
-- symbol-definition lookup hits
-- structural hint hits
-
-Current behavior:
-
-- those files are promoted into `display_sources` before final rendering
-- diagnostics expose `source_alignment.context_paths`, `source_alignment.source_card_paths`, `source_alignment.rendered_paths`, and any missing/stale path lists
-- the public query diagnostics now include `source_alignment` alongside `retrieval_targeting`
-
 - `primary`
 - `split_part`
 - `parent_class`
 - `callee`
 
-### 10.3 Block format
+### 10.3 Source-card alignment
+
+After two-layer source selection, `retrieval/main.py` now aligns visible source cards with the broader reasoning set for the most important cases:
+
+- Tier 0 exact hits
+- symbol-definition lookup hits
+- structural hint hits
+- graph-active hits
+- central/alias-resolved high-confidence paths
+
+Current behavior:
+
+- those files are promoted into `display_sources` before display cap truncation
+- reasoning-only context is allowed and reported as `source_alignment.reasoning_only_paths`
+- reasoning-only context is not treated as missing source cards
+- source cards are preserved when an answer does not mention a file path inline
+- public API diagnostics reconcile `source_alignment.source_card_paths` and `source_alignment.rendered_paths` against the final response sources after validation/post-processing
+- diagnostics expose `source_alignment.context_paths`, `source_alignment.source_card_paths`, `source_alignment.rendered_paths`, `source_alignment.reasoning_only_paths`, and any missing/stale path lists
+- the public query diagnostics include `source_alignment` alongside `retrieval_targeting`
+
+### 10.4 Block format
 
 Each context block contains:
 
@@ -635,7 +640,7 @@ Each context block contains:
 - first few call targets when present
 - raw excerpt text
 
-### 10.4 Truncation
+### 10.5 Truncation
 
 Primary chunks can be truncated to fit the remaining budget. Non-primary chunks are skipped if they do not fit.
 

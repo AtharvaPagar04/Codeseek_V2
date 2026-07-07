@@ -269,33 +269,37 @@ def delete_session(session_id: str, force: bool = False) -> dict:
         # which would otherwise wipe all sessions and trigger cascading deletes.
         try:
             with db_cursor() as (conn, cursor):
-                # 1. thread_turn_entities
+                # 1. graph sidecar
+                cursor.execute("DELETE FROM code_graph_edges WHERE session_id = ?", (session_id,))
+                cursor.execute("DELETE FROM code_graph_nodes WHERE session_id = ?", (session_id,))
+                cursor.execute("DELETE FROM code_graph_builds WHERE session_id = ?", (session_id,))
+                # 2. thread_turn_entities
                 cursor.execute(
                     "DELETE FROM thread_turn_entities WHERE thread_id IN "
                     "(SELECT id FROM chat_threads WHERE repo_session_id = ?)",
                     (session_id,)
                 )
-                # 2. thread_memory
+                # 3. thread_memory
                 cursor.execute(
                     "DELETE FROM thread_memory WHERE thread_id IN "
                     "(SELECT id FROM chat_threads WHERE repo_session_id = ?)",
                     (session_id,)
                 )
-                # 3. chat_messages
+                # 4. chat_messages
                 cursor.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
-                # 4. chat_threads
+                # 5. chat_threads
                 cursor.execute("DELETE FROM chat_threads WHERE repo_session_id = ?", (session_id,))
-                # 5. session_file_chunks
+                # 6. session_file_chunks
                 cursor.execute(
                     "DELETE FROM session_file_chunks WHERE session_file_id IN "
                     "(SELECT id FROM session_files WHERE session_id = ?)",
                     (session_id,)
                 )
-                # 6. session_files
+                # 7. session_files
                 cursor.execute("DELETE FROM session_files WHERE session_id = ?", (session_id,))
-                # 7. indexing_jobs
+                # 8. indexing_jobs
                 cursor.execute("DELETE FROM indexing_jobs WHERE session_id = ?", (session_id,))
-                # 8. repo_sessions
+                # 9. repo_sessions
                 cursor.execute("DELETE FROM repo_sessions WHERE id = ?", (session_id,))
         except Exception as db_exc:
             from retrieval.support.observability import sanitize_credentials_in_string

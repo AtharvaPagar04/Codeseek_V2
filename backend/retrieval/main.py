@@ -322,13 +322,15 @@ def _collect_source_alignment_diagnostics(
     context_paths = _unique_paths(reasoning_sources)
     source_card_paths = _unique_paths(display_sources)
     rendered_paths = _unique_paths(rendered_sources)
-    missing_source_cards = [path for path in context_paths if path not in source_card_paths]
+    reasoning_only_paths = [path for path in context_paths if path not in source_card_paths]
+    missing_source_cards = [path for path in rendered_paths if path not in source_card_paths]
     stale_source_cards = [path for path in source_card_paths if path not in context_paths]
     missing_rendered_cards = [path for path in source_card_paths if path not in rendered_paths]
     return {
         "context_paths": context_paths,
         "source_card_paths": source_card_paths,
         "rendered_paths": rendered_paths,
+        "reasoning_only_paths": reasoning_only_paths,
         "missing_source_cards": missing_source_cards,
         "stale_source_cards": stale_source_cards,
         "missing_rendered_cards": missing_rendered_cards,
@@ -336,47 +338,97 @@ def _collect_source_alignment_diagnostics(
     }
 
 
+def _important_source_paths_from_query_info(query_info: dict | None) -> set[str]:
+    if not isinstance(query_info, dict):
+        return set()
+
+    important: set[str] = set()
+
+    def add_paths(value: object) -> None:
+        if not isinstance(value, (list, tuple, set)):
+            return
+        for path in value:
+            clean = str(path or "").strip()
+            if clean:
+                important.add(clean)
+
+    tier0 = query_info.get("tier0_exact_lookup") if isinstance(query_info.get("tier0_exact_lookup"), dict) else {}
+    add_paths(tier0.get("forced_primary_paths"))
+    add_paths(tier0.get("exact_path_hit_paths"))
+    add_paths(tier0.get("normalized_path_hit_paths"))
+    add_paths(tier0.get("filename_hit_paths"))
+
+    structural_hints = query_info.get("structural_hints") if isinstance(query_info.get("structural_hints"), dict) else {}
+    add_paths(structural_hints.get("paths"))
+
+    symbol_lookup = query_info.get("symbol_lookup") if isinstance(query_info.get("symbol_lookup"), dict) else {}
+    definition_ranking = query_info.get("definition_ranking") if isinstance(query_info.get("definition_ranking"), dict) else {}
+    add_paths(symbol_lookup.get("definition_paths"))
+    add_paths(definition_ranking.get("definition_boost_paths"))
+
+    central_file_ranking = query_info.get("central_file_ranking") if isinstance(query_info.get("central_file_ranking"), dict) else {}
+    add_paths(central_file_ranking.get("boosted_paths"))
+    add_paths(query_info.get("alias_resolved_paths"))
+
+    graph_active = query_info.get("graph_active") if isinstance(query_info.get("graph_active"), dict) else {}
+    add_paths(graph_active.get("added_paths"))
+
+    return important
+
+
+def _is_required_display_source(item: dict, important_paths: set[str]) -> bool:
+    path = str(item.get("relative_path", "")).strip()
+    support_kind = str(item.get("support_kind", "")).strip()
+    retrieval_source = str(item.get("retrieval_source", "")).strip()
+    return (
+        path in important_paths
+        or bool(item.get("exact_retrieval_hit"))
+        or support_kind in {"tier0_exact_lookup", "symbol_definition_lookup", "structural_hint", "graph_active"}
+        or retrieval_source == "graph_active"
+    )
+
+
 def _align_display_sources_with_reasoning(
     display_sources: list[dict],
     reasoning_sources: list[dict],
     display_cap: int = DISPLAY_SOURCES_CAP,
+    query_info: dict | None = None,
 ) -> list[dict]:
     display = list(display_sources or [])
-    seen = {
-        (
-            str(item.get("relative_path", "")).strip(),
-            str(item.get("symbol_name", "")).strip(),
-            int(item.get("start_line", 0) or 0),
-            int(item.get("end_line", 0) or 0),
-            str(item.get("expansion_type", "primary")).strip(),
-        )
-        for item in display
-    }
-    required: list[dict] = []
-    for item in reasoning_sources or []:
-        key = (
-            str(item.get("relative_path", "")).strip(),
-            str(item.get("symbol_name", "")).strip(),
-            int(item.get("start_line", 0) or 0),
-            int(item.get("end_line", 0) or 0),
-            str(item.get("expansion_type", "primary")).strip(),
-        )
-        if key in seen:
-            continue
-        support_kind = str(item.get("support_kind", "")).strip()
-        if (
-            item.get("expansion_type") == "primary"
-            or support_kind in {"tier0_exact_lookup", "symbol_definition_lookup", "structural_hint"}
-        ):
-            required.append(item)
-            seen.add(key)
-    if not required:
+    if display_cap <= 0:
         return display
 
-    aligned = display + required
-    if len(aligned) <= display_cap:
-        return aligned
-    return aligned[:display_cap]
+    important_paths = _important_source_paths_from_query_info(query_info)
+    ordered: list[dict] = []
+    seen: set[tuple[str, str, int, int, str]] = set()
+
+    def source_key(item: dict) -> tuple[str, str, int, int, str]:
+        return (
+            str(item.get("relative_path", "")).strip(),
+            str(item.get("symbol_name", "")).strip(),
+            int(item.get("start_line", 0) or 0),
+            int(item.get("end_line", 0) or 0),
+            str(item.get("expansion_type", "primary")).strip(),
+        )
+
+    def append_once(item: dict) -> None:
+        key = source_key(item)
+        if not key[0] or key in seen:
+            return
+        seen.add(key)
+        ordered.append(item)
+
+    # High-confidence hints must be promoted before the display cap is applied.
+    for item in display:
+        if _is_required_display_source(item, important_paths):
+            append_once(item)
+    for item in reasoning_sources or []:
+        if _is_required_display_source(item, important_paths):
+            append_once(item)
+    for item in display:
+        append_once(item)
+
+    return ordered[:display_cap]
 
 
 def build_low_confidence_response(raw_query: str, candidates: list[dict], shown_sources: list[dict]) -> str:
@@ -1033,8 +1085,6 @@ def post_process_answer_and_sources(
                         "chunk_type": "file",
                         "expansion_type": "primary"
                     })
-        else:
-            final_sources = []
 
     return answer.strip(), final_sources
 
@@ -1045,6 +1095,7 @@ def run_query(
     request_id: str | None = None,
     return_meta: bool = False,
     provider_config: dict | None = None,
+    session_id: str | None = None,
     capture_eval: bool = False,
     stream_handler: Any | None = None,
     abort_event: Any | None = None,
@@ -1056,6 +1107,7 @@ def run_query(
         request_id=request_id,
         return_meta=return_meta,
         provider_config=provider_config,
+        session_id=session_id,
         capture_eval=capture_eval,
         stream_handler=stream_handler,
         abort_event=abort_event,
@@ -1079,6 +1131,7 @@ def _run_query_impl(
     request_id: str | None = None,
     return_meta: bool = False,
     provider_config: dict | None = None,
+    session_id: str | None = None,
     capture_eval: bool = False,
     stream_handler: Any | None = None,
     abort_event: Any | None = None,
@@ -1138,6 +1191,76 @@ def _run_query_impl(
     started = time.perf_counter()
     candidates = search(query_info)
     metrics.add_stage("search", started)
+
+    started = time.perf_counter()
+    try:
+        from retrieval.graph.retrieval import run_graph_shadow_retrieval
+
+        graph_shadow = run_graph_shadow_retrieval(session_id, candidates, query=raw_query)
+        if graph_shadow.get("enabled") or graph_shadow.get("status") != "disabled":
+            meta["graph_shadow"] = graph_shadow
+            log_event(
+                "retrieval.graph_shadow",
+                rid,
+                status=graph_shadow.get("status"),
+                anchors=graph_shadow.get("stats", {}).get("anchors_count", 0),
+                expanded=graph_shadow.get("stats", {}).get("expanded_nodes_count", 0),
+                candidate_chunks=graph_shadow.get("stats", {}).get("candidate_chunks_count", 0),
+            )
+    except Exception as exc:
+        meta["graph_shadow"] = {
+            "enabled": True,
+            "status": "error",
+            "error": str(exc),
+            "anchors": [],
+            "expanded_nodes": [],
+            "candidate_chunks": [],
+            "unresolved_imports": [],
+            "external_packages": [],
+            "stats": {
+                "anchors_count": 0,
+                "expanded_nodes_count": 0,
+                "candidate_chunks_count": 0,
+                "edge_types_used": [],
+                "external_package_count": 0,
+                "unresolved_import_count": 0,
+            },
+        }
+    if meta.get("graph_shadow", {}).get("enabled"):
+        metrics.add_stage("graph_shadow", started)
+
+    started = time.perf_counter()
+    try:
+        from retrieval.graph.retrieval import select_graph_active_candidates
+
+        active_candidates, graph_active = select_graph_active_candidates(
+            candidates,
+            meta.get("graph_shadow") if isinstance(meta.get("graph_shadow"), dict) else graph_shadow,
+        )
+        meta["graph_active"] = graph_active
+        if active_candidates:
+            candidates = list(candidates) + active_candidates
+            log_event(
+                "retrieval.graph_active",
+                rid,
+                added=graph_active.get("added_count", 0),
+                max_added=graph_active.get("max_added", 0),
+                min_score=graph_active.get("min_score", 0),
+            )
+    except Exception as exc:
+        meta["graph_active"] = {
+            "enabled": True,
+            "reason": "error",
+            "error": str(exc),
+            "added_count": 0,
+            "max_added": 0,
+            "min_score": 0,
+            "added_chunks": [],
+            "skipped_count": 0,
+            "skipped_reasons": {},
+        }
+    if meta.get("graph_active", {}).get("enabled"):
+        metrics.add_stage("graph_active", started)
     
     # Phase 1: Capture top 20 raw candidates
     top_raw = []
@@ -1234,11 +1357,20 @@ def _run_query_impl(
     
     query_info["final_source_selection"]["rendered_source_paths"] = [s.get("relative_path") for s in display_sources]
 
+    pre_alignment_display_paths = _unique_paths(display_sources)
     display_sources = _align_display_sources_with_reasoning(
         display_sources,
         reasoning_sources,
-        display_cap=8 if (is_overview_request(raw_query) or is_architecture_request(raw_query)) else DISPLAY_SOURCES_CAP
+        display_cap=8 if (is_overview_request(raw_query) or is_architecture_request(raw_query)) else DISPLAY_SOURCES_CAP,
+        query_info=query_info,
     )
+    post_alignment_display_paths = _unique_paths(display_sources)
+    query_info["final_source_selection"]["rendered_source_paths"] = post_alignment_display_paths
+    if post_alignment_display_paths != pre_alignment_display_paths:
+        query_info["final_source_selection"]["alignment_repair"] = {
+            "before_paths": pre_alignment_display_paths,
+            "after_paths": post_alignment_display_paths,
+        }
     shown_sources = display_sources
     follow_up_anchor_paths = {
         str(path).lower()
