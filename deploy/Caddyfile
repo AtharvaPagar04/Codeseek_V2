@@ -1,0 +1,44 @@
+codeseek.atharvapagar.xyz {
+    # For local production testing, uncomment 'tls internal' to generate self-signed certificates.
+    # In public production, keep it commented out to allow Caddy to obtain Let's Encrypt/ZeroSSL certificates automatically.
+    tls internal
+
+    # Enable gzip and zstd compression
+    encode gzip zstd
+
+	# API Proxy Routing
+	handle_path /api/* {
+		reverse_proxy backend:8000 {
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-Host {host}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	# Auth Routing (including login, callback, logout, etc.)
+	reverse_proxy /auth/* backend:8000 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+		header_up X-Real-IP {remote_host}
+	}
+
+	# SPA Frontend static asset server routing
+	reverse_proxy /* frontend:80 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+
+	# Security headers setup (excluding CSP, which is client/app-specific)
+	header {
+		# Disable sniffing content type
+		X-Content-Type-Options "nosniff"
+		# Protect against clickjacking
+		X-Frame-Options "DENY"
+		# Control referrer information passed
+		Referrer-Policy "no-referrer-when-downgrade"
+		# Enable Browser XSS filter
+		X-XSS-Protection "1; mode=block"
+		# Strict Transport Security (HSTS) - uncomment in production TLS
+		# Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+	}
+}

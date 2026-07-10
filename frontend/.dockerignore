@@ -1,0 +1,44 @@
+# Node dependencies
+node_modules/
+
+# Production builds
+dist/
+
+# Version control
+.git/
+.gitignore
+
+# Environment configurations
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor configurations and IDE metadata
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Documentation and testing coverage
+coverage/
+*.md
+docs/
+
+# Temporary files
+tmp/
+temp/

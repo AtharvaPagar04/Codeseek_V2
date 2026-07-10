@@ -1,0 +1,24 @@
+{
+  "name": "fixture-infra-stack-v1",
+  "repo_root_hint": "tests/fixtures/retrieval_repos/infra_stack",
+  "cases": [
+    {
+      "id": "fixture-infra-001",
+      "query": "What services are defined by this deployment?",
+      "expected_files": ["__repo_summary__.md", "docker-compose.yml"],
+      "expected_dependencies": ["postgres", "redis", "qdrant"]
+    },
+    {
+      "id": "fixture-infra-002",
+      "query": "Where is DATABASE_URL configured?",
+      "expected_files": ["docker-compose.yml", ".env.example"],
+      "expected_dependencies": ["DATABASE_URL"]
+    },
+    {
+      "id": "fixture-infra-003",
+      "query": "Which port exposes Qdrant?",
+      "expected_files": ["docker-compose.yml"],
+      "expected_dependencies": ["6333"]
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "name": "fixture-monorepo-mixed-v1",
+  "repo_root_hint": "tests/fixtures/retrieval_repos/monorepo_mixed",
+  "cases": [
+    {
+      "id": "fixture-monorepo-001",
+      "query": "What is this monorepo about?",
+      "expected_files": ["__repo_summary__.md", "README.md"],
+      "expected_frameworks": ["React", "FastAPI"]
+    },
+    {
+      "id": "fixture-monorepo-002",
+      "query": "Which services are started by docker compose?",
+      "expected_files": ["docker-compose.yml"],
+      "expected_dependencies": ["web", "api", "qdrant"]
+    },
+    {
+      "id": "fixture-monorepo-003",
+      "query": "Where are React and FastAPI dependencies declared?",
+      "expected_files": ["apps/web/package.json", "services/api/requirements.txt"],
+      "expected_frameworks": ["React", "FastAPI"],
+      "expected_dependencies": ["react", "fastapi"]
+    }
+  ]
+}

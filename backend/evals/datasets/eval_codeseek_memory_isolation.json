@@ -1,0 +1,97 @@
+{
+  "name": "codeseek-memory-isolation-eval-v1",
+  "repo_root_hint": "/home/arch/DEV/CodeSeek",
+  "cases": [
+    {
+      "id": "mi-001-unrelated-file-after-auth",
+      "turns": [
+        {
+          "query": "show me _require_auth",
+          "expected_sources": [
+            { "relative_path": "backend/retrieval/api_service.py", "symbol_name": "_require_auth" }
+          ]
+        },
+        {
+          "query": "explain frontend Sidebar.jsx",
+          "expected_is_followup": false,
+          "expected_topic_shift": true,
+          "expected_history_injected": false,
+          "expected_query_rewritten": false,
+          "expected_previous_candidates_injected": 0,
+          "expected_answer_terms": ["Sidebar.jsx"],
+          "forbidden_answer_terms": ["_require_auth"],
+          "forbidden_source_terms": ["backend/retrieval/api_service.py"]
+        }
+      ]
+    },
+    {
+      "id": "mi-002-genuine-pronoun-followup",
+      "turns": [
+        {
+          "query": "show me _require_auth",
+          "expected_sources": [
+            { "relative_path": "backend/retrieval/api_service.py", "symbol_name": "_require_auth" }
+          ]
+        },
+        {
+          "query": "explain it",
+          "expected_is_followup": true,
+          "expected_topic_shift": false,
+          "expected_history_injected": true,
+          "expected_previous_candidates_injected": false
+        }
+      ]
+    },
+    {
+      "id": "mi-003-unrelated-concept-after-qdrant",
+      "turns": [
+        {
+          "query": "show me Qdrant upsert",
+          "expected_answer_terms": ["Qdrant"]
+        },
+        {
+          "query": "how does login work?",
+          "expected_is_followup": false,
+          "expected_topic_shift": true,
+          "expected_history_injected": false,
+          "expected_query_rewritten": false,
+          "expected_previous_candidates_injected": 0,
+          "forbidden_answer_terms": ["Qdrant", "upsert"],
+          "forbidden_source_terms": ["backend/rag_ingestion/stages/storage.py"]
+        }
+      ]
+    },
+    {
+      "id": "mi-004-short-new-topic",
+      "turns": [
+        {
+          "query": "explain indexing pipeline",
+          "expected_answer_terms": ["indexing"]
+        },
+        {
+          "query": "explain decorators",
+          "expected_is_followup": false,
+          "expected_topic_shift": true,
+          "expected_history_injected": false,
+          "expected_previous_candidates_injected": 0,
+          "expected_low_confidence_gate": true,
+          "forbidden_answer_terms": ["indexing", "pipeline"],
+          "forbidden_source_terms": ["backend/rag_ingestion"]
+        }
+      ]
+    },
+    {
+      "id": "mi-005-weak-retrieval",
+      "turns": [
+        {
+          "query": "where is totally_fake_symbol_xyz implemented?",
+          "expected_is_followup": false,
+          "expected_history_injected": false,
+          "expected_low_confidence_gate": true,
+          "expected_response_mode": "low_context",
+          "forbidden_answer_terms": ["totally_fake_symbol_xyz()"]
+        }
+      ]
+    }
+  ]
+}

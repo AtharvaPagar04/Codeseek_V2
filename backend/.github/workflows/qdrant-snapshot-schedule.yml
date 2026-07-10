@@ -1,0 +1,48 @@
+name: qdrant-snapshot-schedule
+
+on:
+  schedule:
+    - cron: "30 1 * * *"
+  workflow_dispatch:
+
+jobs:
+  snapshot-backup:
+    runs-on: ubuntu-latest
+    services:
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run scheduled backup + retention
+        env:
+          QDRANT_COLLECTIONS: repository_chunks__ci__codeseek
+          QDRANT_BACKUP_KEEP_LAST: "14"
+          QDRANT_BACKUP_MAX_AGE_DAYS: "30"
+        run: |
+          python scripts/qdrant_snapshot_schedule.py \
+            --host localhost \
+            --port 6333 \
+            --collections "$QDRANT_COLLECTIONS" \
+            --out-dir backups/qdrant \
+            --keep-last "$QDRANT_BACKUP_KEEP_LAST" \
+            --max-age-days "$QDRANT_BACKUP_MAX_AGE_DAYS"
+
+      - name: Upload backup artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qdrant-snapshots
+          path: backups/qdrant

@@ -1,0 +1,105 @@
+{
+  "name": "codeseek-flow-phase1-v1",
+  "repo_root_hint": "/home/arch/DEV/CodeSeek/backend",
+  "cases": [
+    {
+      "id": "cs-flow-001",
+      "query": "walk me through backend request orchestration flow",
+      "expected_sources": [
+        {"relative_path": "retrieval/api_service.py", "symbol_name": "_query_impl"},
+        {"relative_path": "retrieval/main.py", "symbol_name": "run_query"}
+      ],
+      "expected_symbols": ["_query_impl", "run_query"],
+      "expected_response_mode": "flow_summary",
+      "expected_answer_terms": [
+        "Backend Request Orchestration",
+        "provider configuration",
+        "run_query()"
+      ]
+    },
+    {
+      "id": "cs-flow-002",
+      "query": "explain the auth session lifecycle flow",
+      "expected_sources": [
+        {"relative_path": "retrieval/stores/auth_store.py", "symbol_name": "create_auth_session"},
+        {"relative_path": "retrieval/stores/auth_store.py", "symbol_name": "get_user_for_session_token"}
+      ],
+      "expected_symbols": ["create_auth_session", "get_user_for_session_token"],
+      "expected_response_mode": "flow_summary",
+      "expected_answer_terms": [
+        "Auth And Session Lifecycle",
+        "hashed auth session token",
+        "associated user"
+      ]
+    },
+    {
+      "id": "cs-flow-002b",
+      "query": "how does authentication cookie lifecycle work",
+      "expected_sources": [
+        {"relative_path": "retrieval/stores/auth_store.py", "symbol_name": "create_auth_session"},
+        {"relative_path": "retrieval/stores/auth_store.py", "symbol_name": "get_user_for_session_token"},
+        {"relative_path": "retrieval/stores/auth_store.py", "symbol_name": "delete_auth_session"}
+      ],
+      "expected_symbols": ["create_auth_session", "get_user_for_session_token", "delete_auth_session"],
+      "expected_response_mode": "flow_summary",
+      "expected_answer_terms": [
+        "Auth And Session Lifecycle",
+        "Auth entrypoints exchange or validate GitHub credentials",
+        "Logout deletes the auth session"
+      ]
+    },
+    {
+      "id": "cs-flow-003",
+      "query": "trace the indexing session creation flow",
+      "expected_sources": [
+        {"relative_path": "retrieval/session_indexer.py", "symbol_name": "create_session"},
+        {"relative_path": "retrieval/session_indexer.py", "symbol_name": "_index_job"}
+      ],
+      "expected_symbols": ["create_session", "_index_job"],
+      "expected_response_mode": "flow_summary",
+      "expected_answer_terms": [
+        "Indexing And Session Creation Flow",
+        "creates or reuses a session record",
+        "runs ingestion"
+      ]
+    },
+    {
+      "id": "cs-flow-004",
+      "query": "how does deployment configuration work",
+      "expected_sources": [
+        {"relative_path": "docker-compose.yml"},
+        {"relative_path": "Dockerfile"},
+        {"relative_path": ".env.example"}
+      ],
+      "expected_files": ["docker-compose.yml", "Dockerfile", ".env.example"],
+      "expected_response_mode": "flow_summary",
+      "expected_answer_terms": [
+        "Deployment And Configuration Flow",
+        "Docker Compose defines the runtime services",
+        "environment template documents required secrets"
+      ]
+    },
+    {
+      "id": "cs-flow-005",
+      "query": "explain provider credential lifecycle",
+      "expected_sources": [
+        {"relative_path": "retrieval/api_service.py", "symbol_name": "list_provider_credentials_v1"},
+        {"relative_path": "retrieval/api_service.py", "symbol_name": "create_provider_credential_v1"},
+        {"relative_path": "retrieval/stores/provider_store.py", "symbol_name": "create_provider_credential"},
+        {"relative_path": "retrieval/stores/provider_store.py", "symbol_name": "get_active_provider_credential"}
+      ],
+      "expected_symbols": [
+        "list_provider_credentials_v1",
+        "create_provider_credential_v1",
+        "create_provider_credential",
+        "get_active_provider_credential"
+      ],
+      "expected_response_mode": "flow_summary",
+      "expected_answer_terms": [
+        "Provider Credential Lifecycle",
+        "encrypts the API key",
+        "active provider credential"
+      ]
+    }
+  ]
+}

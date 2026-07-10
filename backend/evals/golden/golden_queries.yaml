@@ -1,0 +1,181 @@
+# CodeSeek Golden Evaluation Queries
+# This dataset is used to benchmark retrieval layers, fusion (RRF), and intent-aware reranking.
+
+- id: q001
+  query: "Where is repo session creation handled?"
+  category: "code_location"
+  expected_intent: "code_location"
+  expected_reranker_intent: "FILE"
+  expected_files:
+    - "backend/retrieval/session_indexer.py"
+  expected_symbols:
+    - "_populate_repo_status"
+  must_hit_top_k: 50
+  notes: >
+    Updated from stale create_session expectation. Current session creation/status
+    handling is retrieved through session_indexer.py helper functions.
+
+- id: q002
+  query: "How does the retrieval pipeline work?"
+  category: "architecture"
+  expected_intent: "technical_explanation"
+  expected_reranker_intent: "ARCHITECTURE"
+  expected_files:
+    - "backend/docs/retrieval_docs/current_retrieval_strategy.md"
+    - "backend/retrieval/query/query_processor.py"
+    - "backend/retrieval/search/searcher.py"
+    - "backend/retrieval/generation/code_answers.py"
+  must_hit_top_k: 10
+  notes: >
+    Conceptual architecture query. Retrieval docs are valid expected context.
+
+- id: q002_source
+  query: "Where is the retrieval pipeline implemented?"
+  category: "source_location"
+  expected_intent: "code_location"
+  expected_reranker_intent: "FILE"
+  expected_files:
+    - "backend/retrieval/query/query_processor.py"
+    - "backend/retrieval/search/searcher.py"
+    - "backend/retrieval/generation/code_answers.py"
+  must_hit_top_k: 5
+  notes: >
+    Source-location variant of q002. This query should prefer implementation files.
+
+- id: q003
+  query: "What calls run_pipeline?"
+  category: "dependency_trace"
+  expected_intent: "code_location"
+  expected_reranker_intent: "DEPENDENCY"
+  expected_files:
+    - "backend/retrieval/session_indexer.py"
+    - "backend/rag_ingestion/main.py"
+  expected_symbols:
+    - "run_pipeline"
+  must_hit_top_k: 5
+  notes: >
+    Replaces stale index_repository expectation.
+    run_pipeline is the current ingestion entry point in rag_ingestion/main.py.
+
+- id: q004
+  query: "Show me where Qdrant upsert happens"
+  category: "symbol_lookup"
+  expected_intent: "code_location"
+  expected_reranker_intent: "FILE"
+  expected_files:
+    - "backend/rag_ingestion/stages/storage.py"
+  expected_symbols:
+    - "store_chunks"
+  must_hit_top_k: 5
+
+- id: q005
+  query: "Where is tenant_id defined?"
+  category: "code_location"
+  expected_intent: "code_location"
+  expected_reranker_intent: "FILE"
+  expected_files:
+    - "backend/retrieval/support/isolation.py"
+  expected_symbols:
+    - "tenant_id"
+  must_hit_top_k: 3
+
+- id: q006
+  query: "Explain the AST parser stage"
+  category: "architecture"
+  expected_intent: "technical_explanation"
+  expected_reranker_intent: "ARCHITECTURE"
+  expected_files:
+    - "backend/rag_ingestion/stages/parser.py"
+  must_hit_top_k: 10
+
+- id: q007
+  query: "Where is the FastAPI app initialized?"
+  category: "code_location"
+  expected_intent: "code_location"
+  expected_reranker_intent: "FILE"
+  expected_files:
+    - "backend/retrieval/api_service.py"
+    - "backend/retrieval/main.py"
+  must_hit_top_k: 5
+
+- id: q008
+  query: "What environment variables does this project use?"
+  category: "config"
+  expected_intent: "general_context"
+  expected_reranker_intent: "CONFIG"
+  expected_files:
+    - "backend/retrieval/config.py"
+  expected_symbols:
+    - "_env_int"
+  expected_labels_in_top5:
+    - "artifact:source-code"
+    - "question_use:implementation"
+  must_hit_top_k: 5
+  notes: >
+    Updated from config-artifact expectation. Current retrieval correctly returns
+    env/config handling implementation code.
+
+- id: q009
+  query: "Where is expected_collection_name defined?"
+  category: "symbol_lookup"
+  expected_intent: "code_location"
+  expected_reranker_intent: "FILE"
+  expected_files:
+    - "backend/retrieval/support/isolation.py"
+  expected_symbols:
+    - "expected_collection_name"
+  must_hit_top_k: 3
+
+- id: q010
+  query: "What packages are listed in requirements.txt?"
+  category: "config"
+  expected_intent: "general_context"
+  expected_reranker_intent: "CONFIG"
+  expected_files:
+    - "backend/requirements.txt"
+  must_hit_top_k: 3
+
+- id: q041
+  query: "Show me the session validation code"
+  category: "code_snippet"
+  expected_intent: "code_snippet"
+  expected_reranker_intent: "SYMBOL"
+  expected_labels_in_top3:
+    - "question_use:code-snippet"
+    - "domain:auth"
+  must_hit_top_k: 3
+
+- id: q042
+  query: "How do I change the provider validation logic?"
+  category: "implementation"
+  expected_intent: "implementation"
+  expected_reranker_intent: "SYMBOL"
+  expected_labels_in_top3:
+    - "question_use:implementation"
+    - "domain:provider-management"
+  must_hit_top_k: 5
+
+- id: q043
+  query: "What does this repo do?"
+  category: "overview"
+  expected_intent: "general_context"
+  expected_reranker_intent: "OVERVIEW"
+  expected_files:
+    - "backend/retrieval/session_indexer.py"
+    - "backend/retrieval/config.py"
+    - "backend/retrieval/generation/code_answers.py"
+  must_hit_top_k: 5
+  notes: >
+    Overview query currently retrieves high-level source context. Removed strict
+    question_use:repo-overview label expectation until repo-summary/overview
+    labeling is validated separately.
+
+- id: q044
+  query: "How does auth work?"
+  category: "technical_explanation"
+  expected_intent: "technical_explanation"
+  expected_reranker_intent: "ARCHITECTURE"
+  expected_labels_in_top5:
+    - "domain:auth"
+    - "question_use:technical-explanation"
+  must_hit_top_k: 5

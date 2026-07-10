@@ -1,0 +1,25 @@
+{
+  "name": "fixture-frontend-app-v1",
+  "repo_root_hint": "tests/fixtures/retrieval_repos/frontend_app",
+  "cases": [
+    {
+      "id": "fixture-frontend-001",
+      "query": "What is this frontend project about?",
+      "expected_files": ["__repo_summary__.md", "README.md"],
+      "expected_frameworks": ["React", "Vite"]
+    },
+    {
+      "id": "fixture-frontend-002",
+      "query": "Which frontend framework and build tool does this project use?",
+      "expected_files": ["package.json"],
+      "expected_frameworks": ["React", "Vite"],
+      "expected_dependencies": ["react", "vite"]
+    },
+    {
+      "id": "fixture-frontend-003",
+      "query": "Where is lucide-react declared?",
+      "expected_files": ["package.json"],
+      "expected_dependencies": ["lucide-react"]
+    }
+  ]
+}

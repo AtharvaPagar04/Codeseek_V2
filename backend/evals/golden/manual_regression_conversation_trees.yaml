@@ -1,0 +1,53 @@
+# CodeSeek manual regression conversation trees
+# Focused multi-turn checks for topic switching and vague follow-up isolation.
+
+conversations:
+  - id: "manual_qdrant_to_auth"
+    description: "Qdrant upsert followed by auth code should keep the auth family isolated."
+    turns:
+      - turn_id: 1
+        query: "show me the Qdrant upsert code"
+        is_followup: false
+        expected_reranker_intent: "SYMBOL"
+        expected_files:
+          - "backend/rag_ingestion/stages/storage.py"
+        expected_symbols:
+          - "store_chunks"
+
+      - turn_id: 2
+        query: "provide me the auth function code"
+        is_followup: false
+        expected_reranker_intent: "SYMBOL"
+        expected_files:
+          - "backend/retrieval/api_service.py"
+          - "backend/retrieval/stores/auth_store.py"
+        expected_symbols:
+          - "_auth_key"
+          - "_require_auth"
+          - "_current_auth_user"
+          - "_require_auth_user"
+          - "create_auth_session"
+          - "get_user_for_session_token"
+          - "delete_auth_session"
+
+  - id: "manual_qdrant_to_safe_eval"
+    description: "Qdrant upsert followed by safe eval code should keep the safe-eval family isolated."
+    turns:
+      - turn_id: 1
+        query: "show me the Qdrant upsert code"
+        is_followup: false
+        expected_reranker_intent: "SYMBOL"
+        expected_files:
+          - "backend/rag_ingestion/stages/storage.py"
+        expected_symbols:
+          - "store_chunks"
+
+      - turn_id: 2
+        query: "show me the safe eval runner code"
+        is_followup: false
+        expected_reranker_intent: "SYMBOL"
+        expected_files:
+          - "backend/evals/run_safe_evals.py"
+        expected_symbols:
+          - "main"
+          - "get_tail"

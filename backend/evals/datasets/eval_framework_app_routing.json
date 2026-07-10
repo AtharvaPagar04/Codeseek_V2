@@ -1,0 +1,438 @@
+{
+  "cases": [
+    {
+      "id": "express-app-init",
+      "query": "Where is the Express app initialized?",
+      "expected_primary_files": [
+        "backend/src/app.js",
+        "backend/src/server.js"
+      ],
+      "allowed_support_files": [
+        "README.md",
+        "package.json"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/",
+        "docker",
+        ".env"
+      ],
+      "expected_fact": "The Express app is initialized with const app = express().",
+      "query_type": "backend_entrypoint_location",
+      "framework": "express"
+    },
+    {
+      "id": "repo-overview",
+      "query": "What does this repo do?",
+      "expected_primary_files": [
+        "README.md",
+        "package.json",
+        "docs/"
+      ],
+      "allowed_support_files": [
+        "backend/src/app.js",
+        "frontend/package.json"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/src/components/",
+        "backend/tests/"
+      ],
+      "expected_fact": "Provides an overview of the full-stack application.",
+      "query_type": "repo_overview",
+      "framework": "any"
+    },
+    {
+      "id": "architecture-flow",
+      "query": "Explain the architecture of this project from frontend to database.",
+      "expected_primary_files": [
+        "README.md",
+        "docs/architecture.md"
+      ],
+      "allowed_support_files": [
+        "backend/src/app.js",
+        "frontend/src/App.jsx",
+        "docker-compose.yml"
+      ],
+      "forbidden_primary_prefixes": [
+        "backend/tests/",
+        "frontend/tests/"
+      ],
+      "expected_fact": "Explains the full-stack architecture, including React frontend, Express backend, and the database.",
+      "query_type": "architecture_flow",
+      "framework": "any"
+    },
+    {
+      "id": "global-middleware",
+      "query": "Which middleware is applied globally in the backend?",
+      "expected_primary_files": [
+        "backend/src/app.js",
+        "backend/src/middleware/"
+      ],
+      "allowed_support_files": [
+        "README.md"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/",
+        "docker"
+      ],
+      "expected_fact": "Global middleware (like cors, express.json) is applied in the app entrypoint.",
+      "query_type": "global_middleware_location",
+      "framework": "express"
+    },
+    {
+      "id": "route-registration",
+      "query": "Where are the main API routes registered?",
+      "expected_primary_files": [
+        "backend/src/routes/index.js",
+        "backend/src/app.js"
+      ],
+      "allowed_support_files": [
+        "backend/src/modules/"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "Routes are registered usually in an index.js router or app.js.",
+      "query_type": "route_registration_location",
+      "framework": "express"
+    },
+    {
+      "id": "jwt-implementation",
+      "query": "Where is JWT authentication implemented?",
+      "expected_primary_files": [
+        "backend/src/utils/jwt.js",
+        "backend/src/modules/auth/",
+        "backend/src/middleware/authenticate.js"
+      ],
+      "allowed_support_files": [
+        "backend/src/routes/"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "JWT signing and verification logic.",
+      "query_type": "jwt_implementation",
+      "framework": "express"
+    },
+    {
+      "id": "login-flow",
+      "query": "How does the login flow work in this repo?",
+      "expected_primary_files": [
+        "backend/src/modules/auth/auth.service.js",
+        "backend/src/modules/auth/auth.controller.js"
+      ],
+      "allowed_support_files": [
+        "frontend/src/pages/Login.jsx"
+      ],
+      "forbidden_primary_prefixes": [
+        "docker",
+        "migrations"
+      ],
+      "expected_fact": "Login flow handles user authentication and returns a token.",
+      "query_type": "auth_implementation",
+      "framework": "express"
+    },
+    {
+      "id": "jwt-payload",
+      "query": "What fields are included in the JWT payload?",
+      "expected_primary_files": [
+        "backend/src/modules/auth/auth.service.js",
+        "backend/src/utils/jwt.js"
+      ],
+      "allowed_support_files": [
+        "backend/src/middleware/authenticate.js"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "The payload includes user ID and roles.",
+      "query_type": "jwt_implementation",
+      "framework": "express"
+    },
+    {
+      "id": "rbac-enforcement",
+      "query": "Where is role-based access control enforced?",
+      "expected_primary_files": [
+        "backend/src/middleware/authorizeRoles.js",
+        "backend/src/middleware/rbac.js"
+      ],
+      "allowed_support_files": [
+        "backend/src/routes/"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "Middleware that checks user roles against allowed roles.",
+      "query_type": "rbac_implementation",
+      "framework": "express"
+    },
+    {
+      "id": "admin-route",
+      "query": "Which route is admin-only in this project?",
+      "expected_primary_files": [
+        "backend/src/routes/",
+        "backend/src/modules/admin/"
+      ],
+      "allowed_support_files": [
+        "backend/src/middleware/authorizeRoles.js"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "Identifies routes protected by admin role middleware.",
+      "query_type": "rbac_implementation",
+      "framework": "express"
+    },
+    {
+      "id": "task-ownership",
+      "query": "How does the backend verify task ownership?",
+      "expected_primary_files": [
+        "backend/src/modules/tasks/task.service.js",
+        "backend/src/middleware/verifyOwnership.js"
+      ],
+      "allowed_support_files": [
+        "backend/src/modules/tasks/task.controller.js"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "Verifies that the requested task belongs to the authenticated user.",
+      "query_type": "ownership_implementation",
+      "framework": "express"
+    },
+    {
+      "id": "admin-task-visibility",
+      "query": "Can admins see all tasks while normal users only see their own?",
+      "expected_primary_files": [
+        "backend/src/modules/tasks/task.service.js"
+      ],
+      "allowed_support_files": [
+        "backend/src/modules/tasks/task.controller.js"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "Admins bypass the user_id filter when fetching tasks.",
+      "query_type": "service_behavior",
+      "framework": "express"
+    },
+    {
+      "id": "task-pagination",
+      "query": "Where is the logic for listing tasks with pagination?",
+      "expected_primary_files": [
+        "backend/src/modules/tasks/task.service.js",
+        "backend/src/modules/tasks/task.controller.js"
+      ],
+      "allowed_support_files": [
+        "backend/src/utils/pagination.js"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "Implements limit and offset/skip for task queries.",
+      "query_type": "service_behavior",
+      "framework": "express"
+    },
+    {
+      "id": "task-filters",
+      "query": "How are task status and priority filters handled?",
+      "expected_primary_files": [
+        "backend/src/modules/tasks/task.service.js"
+      ],
+      "allowed_support_files": [
+        "backend/src/modules/tasks/task.controller.js"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "Filters tasks based on status and priority query parameters.",
+      "query_type": "service_behavior",
+      "framework": "express"
+    },
+    {
+      "id": "task-soft-delete",
+      "query": "Is task deletion soft delete or hard delete?",
+      "expected_primary_files": [
+        "backend/src/modules/tasks/task.service.js",
+        "backend/database/migrations/"
+      ],
+      "allowed_support_files": [
+        "backend/tests/"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "Backend service logic or migration defines soft vs hard delete.",
+      "query_type": "service_behavior",
+      "framework": "express"
+    },
+    {
+      "id": "deleted-task-404",
+      "query": "Why does a deleted task return 404 afterwards?",
+      "expected_primary_files": [
+        "backend/src/modules/tasks/task.service.js"
+      ],
+      "allowed_support_files": [
+        "backend/src/modules/tasks/task.controller.js"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "Service filters out soft-deleted records or record is hard-deleted.",
+      "query_type": "service_behavior",
+      "framework": "express"
+    },
+    {
+      "id": "auth-schemas",
+      "query": "Where are auth request schemas defined?",
+      "expected_primary_files": [
+        "backend/src/modules/auth/auth.schema.js",
+        "backend/src/modules/auth/auth.validator.js"
+      ],
+      "allowed_support_files": [
+        "backend/src/routes/"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "Defines validation schemas for login and register requests.",
+      "query_type": "schema_location",
+      "framework": "express"
+    },
+    {
+      "id": "task-schemas",
+      "query": "Where are task request schemas defined?",
+      "expected_primary_files": [
+        "backend/src/modules/tasks/task.schema.js",
+        "backend/src/modules/tasks/task.validator.js"
+      ],
+      "allowed_support_files": [
+        "backend/src/routes/"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "Defines validation schemas for creating and updating tasks.",
+      "query_type": "schema_location",
+      "framework": "express"
+    },
+    {
+      "id": "api-error-handling",
+      "query": "How are API errors formatted into a consistent response shape?",
+      "expected_primary_files": [
+        "backend/src/middleware/errorHandler.js",
+        "backend/src/utils/AppError.js"
+      ],
+      "allowed_support_files": [
+        "backend/src/app.js"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "Global error handling middleware formats errors consistently.",
+      "query_type": "api_error_handling",
+      "framework": "express"
+    },
+    {
+      "id": "swagger-config",
+      "query": "Where is Swagger configured and served?",
+      "expected_primary_files": [
+        "backend/src/swagger.js",
+        "backend/src/config/swagger.js",
+        "backend/src/app.js"
+      ],
+      "allowed_support_files": [],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "Swagger UI is served at a specific route with API documentation.",
+      "query_type": "swagger_configuration",
+      "framework": "express"
+    },
+    {
+      "id": "migrations-tables",
+      "query": "What database tables are created by the migrations?",
+      "expected_primary_files": [
+        "backend/database/migrations/"
+      ],
+      "allowed_support_files": [
+        "backend/database/schema.sql"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/",
+        "backend/src/modules/"
+      ],
+      "expected_fact": "Migrations define tables like users, tasks, etc.",
+      "query_type": "migration_schema",
+      "framework": "express"
+    },
+    {
+      "id": "frontend-dashboard",
+      "query": "Where is the frontend dashboard page implemented?",
+      "expected_primary_files": [
+        "frontend/src/pages/DashboardPage.jsx",
+        "frontend/src/pages/Dashboard.jsx"
+      ],
+      "allowed_support_files": [
+        "frontend/src/App.jsx",
+        "frontend/src/routes.js"
+      ],
+      "forbidden_primary_prefixes": [
+        "backend/"
+      ],
+      "expected_fact": "React component for the main dashboard view.",
+      "query_type": "frontend_page_location",
+      "framework": "react"
+    },
+    {
+      "id": "frontend-dashboard-logic",
+      "query": "How does the dashboard decide between \"All Tasks\" and \"My Tasks\"?",
+      "expected_primary_files": [
+        "frontend/src/pages/DashboardPage.jsx",
+        "frontend/src/components/TaskFilter.jsx"
+      ],
+      "allowed_support_files": [
+        "frontend/src/hooks/useTasks.js"
+      ],
+      "forbidden_primary_prefixes": [
+        "backend/"
+      ],
+      "expected_fact": "Frontend state determines which filter to apply.",
+      "query_type": "frontend_page_location",
+      "framework": "react"
+    },
+    {
+      "id": "tests-admin-access",
+      "query": "Which tests verify admin access control?",
+      "expected_primary_files": [
+        "backend/tests/rbac.test.js",
+        "backend/tests/admin.test.js"
+      ],
+      "allowed_support_files": [
+        "backend/src/middleware/authorizeRoles.js"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "Unit or integration tests that assert 403 for non-admins.",
+      "query_type": "test_lookup",
+      "framework": "express"
+    },
+    {
+      "id": "tests-deleted-tasks",
+      "query": "Which tests verify that deleted tasks no longer appear in task results?",
+      "expected_primary_files": [
+        "backend/tests/task.test.js",
+        "backend/tests/task.service.test.js"
+      ],
+      "allowed_support_files": [
+        "backend/src/modules/tasks/task.service.js"
+      ],
+      "forbidden_primary_prefixes": [
+        "frontend/"
+      ],
+      "expected_fact": "Tests verifying list endpoint behavior after deletion.",
+      "query_type": "test_lookup",
+      "framework": "express"
+    }
+  ]
+}

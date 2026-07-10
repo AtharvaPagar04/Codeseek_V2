@@ -1,0 +1,61 @@
+# Golden Conversation Trees for Multi-turn CodeSeek Retrieval Validation
+
+conversations:
+  - id: "conv_01_auth_flow"
+    description: "Multi-turn flow focusing on session management and token validation"
+    turns:
+      - turn_id: 1
+        query: "where is the session database table defined?"
+        is_followup: false
+        expected_reranker_intent: "FILE"
+        expected_files:
+          - "backend/retrieval/db.py"
+        expected_symbols:
+          - "db_cursor"
+
+      - turn_id: 2
+        query: "how does session validation use it?"
+        is_followup: true
+        expected_reranker_intent: "FOLLOWUP"
+        expected_files:
+          - "backend/retrieval/db.py"
+        expected_symbols:
+          - "db_cursor"
+
+      - turn_id: 3
+        query: "what calls process_query in the api layer?"
+        is_followup: false
+        expected_reranker_intent: "DEPENDENCY"
+        expected_files:
+          - "backend/retrieval/main.py"
+        expected_symbols:
+          - "process_query"
+
+      - turn_id: 4
+        query: "what calls this?"
+        is_followup: true
+        expected_reranker_intent: "FOLLOWUP"
+        expected_files:
+          - "backend/retrieval/main.py"
+        expected_symbols:
+          - "process_query"
+
+  - id: "conv_02_indexing_remediation"
+    description: "Multi-turn flow focusing on index health and remediation guidance"
+    turns:
+      - turn_id: 1
+        query: "what does the index health check validate?"
+        is_followup: false
+        expected_reranker_intent: "ARCHITECTURE"
+        expected_files:
+          - "backend/evals/index_health.py"
+        expected_symbols:
+          - "run_index_health_check"
+
+      - turn_id: 2
+        query: "how do I run its remediation?"
+        is_followup: true
+        expected_reranker_intent: "FOLLOWUP"
+        expected_files:
+          - "backend/evals/index_health.py"
+          - "backend/evals/reindex_guidance.py"

@@ -1,0 +1,48 @@
+global:
+  resolve_timeout: 5m
+  # smtp_smarthost: 'smtp.example.com:587'
+  # smtp_from: 'alerts@your-domain.com'
+  # smtp_auth_username: 'alerts@your-domain.com'
+  # smtp_auth_password: 'your-smtp-password'
+
+# Notification routing tree.
+route:
+  receiver: "default"
+  group_by: ["alertname", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    # Critical alerts (BackendDown, QdrantDown, PostgresDown) fire immediately
+    - match:
+        severity: critical
+      receiver: "critical"
+      group_wait: 10s
+      repeat_interval: 1h
+
+receivers:
+  # Default receiver — configure to suit your environment.
+  # Uncomment and fill in one or more notification methods below.
+  - name: "default"
+    # webhook_configs:
+    #   - url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+    #     send_resolved: true
+    # email_configs:
+    #   - to: "ops@your-domain.com"
+    #     send_resolved: true
+
+  - name: "critical"
+    # webhook_configs:
+    #   - url: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+    #     send_resolved: true
+    # pagerduty_configs:
+    #   - service_key: "YOUR_PAGERDUTY_SERVICE_KEY"
+
+inhibit_rules:
+  # If backend is completely down, suppress secondary warnings
+  - source_match:
+      alertname: "BackendDown"
+    target_match_re:
+      alertname: "ProviderRateLimitSpike|AuthFailureSpike|HighQueryLatency"
+    equal: ["job"]

@@ -1,0 +1,3 @@
+-r requirements-base.txt
+torch
+sentence-transformers==5.1.0

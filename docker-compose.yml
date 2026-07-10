@@ -1,0 +1,108 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-codeseek}
+      POSTGRES_USER: ${POSTGRES_USER:-codeseek}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-codeseek_secure_db_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-codeseek} -d $${POSTGRES_DB:-codeseek}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - codeseek_net
+
+  qdrant:
+    image: qdrant/qdrant:v1.10.1
+    restart: unless-stopped
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - codeseek_net
+
+  backend:
+    build:
+      context: ./backend
+      args:
+        BUILD_PROFILE: cpu
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      CODESEEK_DB_BACKEND: postgres
+      CODESEEK_DATABASE_URL: postgresql://${POSTGRES_USER:-codeseek}:${POSTGRES_PASSWORD:-codeseek_secure_db_password}@postgres:5432/${POSTGRES_DB:-codeseek}
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_URL: http://qdrant:6333
+      CODESEEK_REPO_WORKSPACE: /data/repo_workspace
+    volumes:
+      - repo_workspace:/data/repo_workspace
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/api/v1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - codeseek_net
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: /api
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:80/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - codeseek_net
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - codeseek_net
+
+networks:
+  codeseek_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  qdrant_storage:
+  repo_workspace:
+  caddy_data:
+  caddy_config:

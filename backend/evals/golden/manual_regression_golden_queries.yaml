@@ -1,0 +1,72 @@
+# CodeSeek manual regression golden queries
+# Focused cases for the already-fixed broad code routes and source-location behavior.
+
+- id: manual_auth_function_code
+  query: "provide me the auth function code"
+  category: "code_snippet"
+  expected_intent: "code_snippet"
+  expected_reranker_intent: "SYMBOL"
+  expected_response_mode: "code_snippet"
+  expected_files:
+    - "backend/retrieval/api_service.py"
+    - "backend/retrieval/stores/auth_store.py"
+  expected_symbols:
+    - "_auth_key"
+    - "_require_auth"
+    - "_current_auth_user"
+    - "_require_auth_user"
+    - "create_auth_session"
+    - "get_user_for_session_token"
+    - "delete_auth_session"
+  must_hit_top_k: 5
+  notes: >
+    Regression for the broad auth route. The final answer should stay inside
+    the auth/session source family and should not surface retrieval internals.
+
+- id: manual_safe_eval_runner_code
+  query: "show me the safe eval runner code"
+  category: "code_snippet"
+  expected_intent: "code_snippet"
+  expected_reranker_intent: "SYMBOL"
+  expected_response_mode: "code_snippet"
+  expected_files:
+    - "backend/evals/run_safe_evals.py"
+  expected_symbols:
+    - "main"
+    - "get_tail"
+  must_hit_top_k: 5
+  notes: >
+    Regression for the safe-eval runner route. The answer should stay on the
+    runner file even after previous auth or Qdrant turns.
+
+- id: manual_evaluation_report_api_endpoint_code
+  query: "show me the evaluation report API endpoint code"
+  category: "code_snippet"
+  expected_intent: "code_snippet"
+  expected_reranker_intent: "SYMBOL"
+  expected_response_mode: "code_snippet"
+  expected_files:
+    - "backend/retrieval/api_service.py"
+    - "backend/retrieval/support/eval_reports.py"
+  expected_symbols:
+    - "get_latest_evaluation_report_v1"
+    - "get_latest_evaluation_report"
+  must_hit_top_k: 5
+  notes: >
+    Regression for the evaluation-report API route. This should surface the
+    decorated endpoint and its supporting loader, not internal reranker code.
+
+- id: manual_safe_eval_source_location
+  query: "Where is safe eval implemented?"
+  category: "source_location"
+  expected_intent: "code_location"
+  expected_reranker_intent: "FILE"
+  expected_response_mode: "source_location"
+  expected_files:
+    - "backend/evals/run_safe_evals.py"
+  expected_symbols:
+    - "main"
+  must_hit_top_k: 5
+  notes: >
+    Regression for implementation-vs-docs source-location ranking. The real
+    runner file should stay primary when it exists.
