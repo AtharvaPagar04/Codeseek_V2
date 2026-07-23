@@ -46,6 +46,7 @@ function Shell() {
     oauthError,
     authStateMessage,
     initiateOAuth,
+    resetOauth,
     storeAuth,
     fetchRepos,
     disconnect,
@@ -343,7 +344,10 @@ function Shell() {
           reposLoading={reposLoading}
           reposError={reposError}
           onSelect={handleSelectRepo}
-          onClose={() => setModalOpen(false)}
+          onClose={() => {
+            setModalOpen(false);
+            resetOauth();
+          }}
           onConnectGitHub={initiateOAuth}
           onLoadRepos={fetchRepos}
           onSaveToken={storeAuth}

@@ -81,7 +81,7 @@ class IngestionNonCodeFilesTests(unittest.TestCase):
                 patch.object(ingestion_main, "save_ingestion_state"), \
                 patch.object(ingestion_main, "parse_file", side_effect=fake_parse), \
                 patch.object(ingestion_main, "generate_chunks", side_effect=fake_generate_chunks), \
-                patch.object(ingestion_main, "embed_chunks", side_effect=lambda chunks, _counters: chunks), \
+                patch.object(ingestion_main, "embed_chunks", side_effect=lambda chunks, _counters, **kwargs: chunks), \
                 patch.object(ingestion_main, "store_chunks", side_effect=fake_store_chunks):
                 ingestion_main.run_pipeline(str(root))
 

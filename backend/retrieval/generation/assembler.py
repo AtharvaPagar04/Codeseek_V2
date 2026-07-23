@@ -367,15 +367,21 @@ def _format_block(chunk: dict, content: str) -> str:
     lines = [header]
     if label != "primary":
         lines.append(f"[included as: {label}]")
+    metadata_lines: list[str] = []
     if chunk.get("signature"):
-        lines.append(f"Signature: {chunk['signature']}")
+        metadata_lines.append(f"Signature: {chunk['signature']}")
     if chunk.get("summary"):
-        lines.append(f"Summary: {chunk['summary']}")
+        metadata_lines.append(f"Summary: {chunk['summary']}")
     calls = chunk.get("calls") or []
     if calls:
-        lines.append(f"Calls: {', '.join(calls[:8])}")
-    lines.append("")
+        metadata_lines.append(f"Calls: {', '.join(calls[:8])}")
+    if metadata_lines:
+        lines.append('<metadata hidden="true">')
+        lines.extend(metadata_lines)
+        lines.append("</metadata>")
+    lines.append("<source_code>")
     lines.append(content.rstrip())
+    lines.append("</source_code>")
     return "\n".join(lines)
 
 

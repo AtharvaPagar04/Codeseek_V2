@@ -29,12 +29,9 @@ class TestAnswerModes(unittest.TestCase):
         )
         
         # Target shape asserts
-        self.assertTrue(answer.startswith("The implementation is in:"))
-        self.assertIn("* `backend/retrieval/api_service.py`", answer)
-        self.assertIn("symbol/function: `startup_checks`", answer)
-        self.assertIn("why: Exposes the API endpoint and wires the request to backend logic.", answer)
-        self.assertIn("Related sources:", answer)
-        self.assertIn("* `backend/retrieval/config.py`", answer)
+        self.assertIn("The logic is implemented in `backend/retrieval/api_service.py` (specifically within `startup_checks`)", answer)
+        self.assertIn("Exposes the API endpoint and wires the request to backend logic.", answer)
+        self.assertIn("Related files include `backend/retrieval/config.py`.", answer)
         self.assertNotIn("I found partial evidence", answer)
 
     def test_source_location_formatting_partial(self) -> None:
@@ -54,9 +51,8 @@ class TestAnswerModes(unittest.TestCase):
             evidence_confidence=evidence_confidence
         )
         
-        self.assertTrue(answer.startswith("I found partial evidence. The implementation is in:"))
-        self.assertIn("* `backend/retrieval/api_service.py`", answer)
-        self.assertNotIn("Related sources:", answer)
+        self.assertIn("I found partial evidence. The logic is implemented in `backend/retrieval/api_service.py` (specifically within `startup_checks`)", answer)
+        self.assertNotIn("Related files include", answer)
 
     def test_overview_formatting_codeseek(self) -> None:
         sources = [
@@ -70,9 +66,11 @@ class TestAnswerModes(unittest.TestCase):
         answer = build_overview_answer("what does this repo do?", sources, chunks)
         
         self.assertIn("CodeSeek API service for indexing and retrieving chunks", answer)
-        self.assertIn("backend/retrieval handles query processing", answer)
-        self.assertIn("Key areas from the retrieved sources:", answer)
-        self.assertIn("* `backend/retrieval/api_service.py`: Exposes the API endpoint and wires the request to backend logic.", answer)
+        self.assertIn("Overview synthesized from indexed repository metadata and implementation files.", answer)
+        self.assertIn("Core backend logic is implemented in `backend/retrieval`", answer)
+        self.assertNotIn("repository-grounded RAG", answer)
+        self.assertNotIn("Key areas from the retrieved sources:", answer)
+        self.assertIn("`backend/retrieval/api_service.py` exposes the API endpoint and wires the request to backend logic.", answer)
 
     def test_flow_formatting_complete(self) -> None:
         sources = [
@@ -105,11 +103,9 @@ class TestAnswerModes(unittest.TestCase):
         
         answer = build_flow_answer("How does auth work?", sources, [])
         
-        self.assertIn("The flow appears to be:", answer)
         self.assertIn("1. Auth entrypoint", answer)
         self.assertIn("* file: `backend/retrieval/api_service.py` :: `auth_github_callback`", answer)
-        self.assertIn("Evidence status:", answer)
-        self.assertIn("* complete", answer)
+        self.assertNotIn("Evidence status:", answer)
 
     def test_flow_formatting_partial(self) -> None:
         sources = [
@@ -122,10 +118,9 @@ class TestAnswerModes(unittest.TestCase):
         
         answer = build_flow_answer("How does auth work?", sources, [])
         
-        self.assertIn("The flow appears to be:", answer)
-        self.assertIn("Evidence status:", answer)
-        self.assertIn("* partial", answer)
-        self.assertIn("missing:", answer)
+        self.assertNotIn("The flow appears to be:", answer)
+        self.assertNotIn("Evidence status:", answer)
+        self.assertNotIn("missing:", answer)
 
     def test_low_context_fallback(self) -> None:
         # If no sources
@@ -133,6 +128,18 @@ class TestAnswerModes(unittest.TestCase):
         self.assertIn("I could not find strong evidence for that in the indexed repository context.", answer)
         self.assertIn("* a file name", answer)
         self.assertIn("* a function name", answer)
+
+    def test_symbol_behavior_detector(self) -> None:
+        from retrieval.generation.code_answers import is_symbol_behavior_request
+        self.assertTrue(is_symbol_behavior_request("what does _is_system_ignored do and how does it determine which files to filter out"))
+        self.assertTrue(is_symbol_behavior_request("explain how filter_files decides what to skip"))
+        self.assertFalse(is_symbol_behavior_request("where is _is_system_ignored defined"))
+
+    def test_usage_example_detector(self) -> None:
+        from retrieval.generation.code_answers import is_usage_example_request
+        self.assertTrue(is_usage_example_request("write a python snippet demonstrating how to call filter_files with a custom ignore list"))
+        self.assertTrue(is_usage_example_request("give me an example of calling this API"))
+        self.assertFalse(is_usage_example_request("show me the implementation of filter_files"))
 
 if __name__ == "__main__":
     unittest.main()

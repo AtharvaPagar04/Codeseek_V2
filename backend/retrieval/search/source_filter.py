@@ -80,6 +80,9 @@ _EVAL_REPORT_TOPIC_TERMS = (
     "evaluation diagnostics endpoint",
     "evaluation latest endpoint",
     "safe eval report endpoint",
+    "index preview",
+    "index preview api",
+    "index preview endpoint",
 )
 
 _QDRANT_TOPIC_TERMS = (

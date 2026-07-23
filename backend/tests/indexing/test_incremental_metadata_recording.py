@@ -58,7 +58,7 @@ def test_passive_metadata_recording(monkeypatch, tmp_path: Path):
         )
 
     # Mock pipeline operations requiring external services
-    monkeypatch.setattr(pipeline_main, "embed_chunks", lambda chunks, counters: chunks)
+    monkeypatch.setattr(pipeline_main, "embed_chunks", lambda chunks, counters, **kwargs: chunks)
     monkeypatch.setattr(
         pipeline_main,
         "store_chunks",

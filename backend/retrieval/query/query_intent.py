@@ -393,7 +393,7 @@ def classify_source_intent(query: str) -> str:
             "what does this repo do",
         )
     ):
-        return "repo_overview"
+        return "overview"
     if "architecture" in normalized and ("flow" in normalized or "frontend to database" in normalized or "project from" in normalized):
         return "architecture_flow"
     if any(phrase in normalized for phrase in ("major runtime components", "runtime components", "runtime architecture")):

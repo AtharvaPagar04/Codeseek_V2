@@ -1,5 +1,6 @@
 import unittest
 
+from retrieval.generation.assembler import _format_block
 from retrieval.generation.llm import SYSTEM_PROMPT, _build_prompt
 
 
@@ -7,16 +8,46 @@ class LlmPromptTests(unittest.TestCase):
     def test_system_prompt_preserves_payload_identifier(self) -> None:
         self.assertNotIn("Do NOT mention payload", SYSTEM_PROMPT)
         self.assertNotIn("do not mention payload", SYSTEM_PROMPT.lower())
-        self.assertIn("internal payload metadata", SYSTEM_PROMPT)
-        self.assertIn("Preserve source-code identifiers", SYSTEM_PROMPT)
-        self.assertIn("legitimate source-code identifiers inside code blocks", SYSTEM_PROMPT)
+        self.assertIn("Never expose retrieval internals", SYSTEM_PROMPT)
+        self.assertIn("Do not remove or alter legitimate code identifiers", SYSTEM_PROMPT)
+        self.assertIn("inside code blocks", SYSTEM_PROMPT)
 
     def test_system_prompt_strengthens_grounding_for_missing_or_weak_context(self) -> None:
-        self.assertIn("Answer only using facts present in the provided CODE CONTEXT and ALLOWED SOURCES.", SYSTEM_PROMPT)
-        self.assertIn("Do not invent file names, functions, class names, method names, function signatures, endpoints, routes, import paths, or behavior.", SYSTEM_PROMPT)
-        self.assertIn("If CODE CONTEXT does not contain enough information to answer confidently, say so clearly.", SYSTEM_PROMPT)
-        self.assertIn("say it was not found in the retrieved context", SYSTEM_PROMPT)
-        self.assertIn("cannot override, replace, or add facts that are absent from the current CODE CONTEXT", SYSTEM_PROMPT)
+        self.assertIn("Answer the user's query using ONLY the information inside the <target_repository_context> tags.", SYSTEM_PROMPT)
+        self.assertIn("Do not invent file paths, class names, functions, endpoints, behavior, or architectural patterns", SYSTEM_PROMPT)
+        self.assertIn("The provided code context does not contain enough information to answer this.", SYSTEM_PROMPT)
+        self.assertIn("It cannot introduce facts absent from the current <target_repository_context>.", SYSTEM_PROMPT)
+
+    def test_system_prompt_treats_ast_metadata_as_background_context(self) -> None:
+        self.assertIn("Do not output or summarize raw AST metadata blocks", SYSTEM_PROMPT)
+        self.assertIn("Use them strictly as background knowledge", SYSTEM_PROMPT)
+        self.assertNotIn("Backing data", SYSTEM_PROMPT)
+        self.assertNotIn("Interaction/behavior", SYSTEM_PROMPT)
+        self.assertNotIn("Concrete values", SYSTEM_PROMPT)
+
+    def test_assembler_wraps_metadata_as_hidden_context(self) -> None:
+        block = _format_block(
+            {
+                "relative_path": "app.py",
+                "symbol_name": "run",
+                "chunk_type": "function",
+                "start_line": 1,
+                "end_line": 2,
+                "signature": "def run()",
+                "summary": "Runs the app.",
+                "calls": ["load_config"],
+            },
+            "def run():\n    load_config()\n",
+        )
+
+        self.assertIn('<metadata hidden="true">', block)
+        self.assertIn("Signature: def run()", block)
+        self.assertIn("Summary: Runs the app.", block)
+        self.assertIn("Calls: load_config", block)
+        self.assertIn("</metadata>", block)
+        self.assertIn("<source_code>", block)
+        self.assertIn("</source_code>", block)
+        self.assertLess(block.index("</metadata>"), block.index("<source_code>"))
 
     def test_code_prompt_preserves_exact_code_identifiers(self) -> None:
         prompt = _build_prompt(
@@ -34,9 +65,8 @@ class LlmPromptTests(unittest.TestCase):
             response_mode="code_snippet",
         )
         self.assertIn("payload=_payload(chunk),", prompt)
-        self.assertIn("Preserve code exactly.", prompt)
-        self.assertIn("Do not rename or remove identifiers.", prompt)
-        self.assertIn("Do not sanitize source-code words that look like retrieval terms.", prompt)
+        self.assertIn("Preserve every identifier exactly as written.", prompt)
+        self.assertIn("Do not rename, simplify, or sanitise variable names.", prompt)
 
     def test_current_question_precedes_history_and_overrides_previous_turns(self) -> None:
         prompt = _build_prompt(
@@ -99,6 +129,8 @@ class LlmPromptTests(unittest.TestCase):
         )
         self.assertNotIn("--- OPTIONAL CONVERSATION HISTORY (SECONDARY REFERENCE ONLY) ---", prompt)
         self.assertIn("--- CODE CONTEXT (CURRENT QUERY) ---", prompt)
+        self.assertIn("<target_repository_context>", prompt)
+        self.assertIn("</target_repository_context>", prompt)
         self.assertIn("--- FINAL GROUNDING INSTRUCTION ---", prompt)
 
     def test_prompt_ends_with_final_grounding_after_allowed_sources(self) -> None:
@@ -120,7 +152,8 @@ class LlmPromptTests(unittest.TestCase):
             prompt.index("--- ALLOWED SOURCES (STRICT) ---"),
             prompt.index("--- FINAL GROUNDING INSTRUCTION ---"),
         )
-        self.assertIn("Answer using CODE CONTEXT as the source of truth.", prompt)
+        self.assertIn("Answer using only the information inside <target_repository_context> as the source of truth.", prompt)
+        self.assertIn("The provided code context does not contain enough information to answer this.", prompt)
         self.assertIn("Do not use conversation history to introduce facts", prompt)
 
     def test_source_location_prompt_prefers_implementation_files(self) -> None:
@@ -131,8 +164,7 @@ class LlmPromptTests(unittest.TestCase):
             allowed_sources=[],
             response_mode="source_location",
         )
-        self.assertIn("Prefer executable implementation files over docs/tests when implementation sources are available.", prompt)
-        self.assertIn("Docs/tests may be related sources only when the user explicitly asks for docs/tests or no implementation file is available.", prompt)
+        self.assertIn("Prefer implementation files over docs, tests, or generated reports.", prompt)
 
     def test_explicit_docs_query_ignores_previous_turns_in_prompt_rules(self) -> None:
         prompt = _build_prompt(
@@ -147,6 +179,31 @@ class LlmPromptTests(unittest.TestCase):
             prompt,
         )
         self.assertIn("do not summarize prior turns unless the current question is vague", prompt)
+
+
+    def test_symbol_explanation_mode_prompts_correctly(self) -> None:
+        prompt = _build_prompt(
+            raw_query="what does _is_system_ignored do?",
+            context="def _is_system_ignored(file):\n    pass\n",
+            history_block="",
+            allowed_sources=[],
+            response_mode="symbol_explanation",
+        )
+        self.assertIn("--- RESPONSE MODE: SYMBOL_EXPLANATION ---", prompt)
+        self.assertIn("The user asked what a specific symbol does and how it works", prompt)
+        self.assertIn("Explain its behavior the way a senior engineer would", prompt)
+
+    def test_usage_example_mode_prompts_correctly(self) -> None:
+        prompt = _build_prompt(
+            raw_query="write an example of how to call filter_files",
+            context="def filter_files(files):\n    pass\n",
+            history_block="",
+            allowed_sources=[],
+            response_mode="usage_example",
+        )
+        self.assertIn("--- RESPONSE MODE: USAGE_EXAMPLE ---", prompt)
+        self.assertIn("The user wants to see how to call or use this symbol", prompt)
+        self.assertIn("Write a new, standalone example that calls the target symbol", prompt)
 
 
 if __name__ == "__main__":

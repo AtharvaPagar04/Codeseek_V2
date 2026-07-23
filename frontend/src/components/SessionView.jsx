@@ -28,7 +28,7 @@ function getProviderFallbackModel(provider) {
 function GraphAssistToggle({ enabled, disabled, onChange }) {
   return (
     <label
-      className={`relative group flex items-center gap-1.5 px-1.5 py-0.5 rounded-lg border text-[10px] font-mono select-none transition-colors ${enabled
+      className={`relative group flex items-center gap-1.5 px-2 py-1 rounded-xl border text-[10px] font-mono select-none transition-colors ${enabled
           ? 'bg-surface-3 border-text-muted text-text-primary'
           : 'bg-surface-2 border-border text-text-muted hover:text-text-primary hover:border-text-muted'
         } ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
@@ -56,6 +56,8 @@ function GraphAssistToggle({ enabled, disabled, onChange }) {
             }`}
         />
       </span>
+
+      <span>Graph Assist</span>
 
       {/* Hover tooltip */}
       <span
@@ -725,7 +727,6 @@ export default function SessionView({
               className="flex items-center gap-2 px-4 py-1.5 rounded-2xl border border-border bg-surface-2 shadow-lg transition-colors focus-within:border-text-muted"
               style={{ boxShadow: '0 0 20px rgba(0, 0, 0, 0.5), 0 0 2px rgba(255, 255, 255, 0.03)' }}
             >
-              <ModelSelector activeModel={selectedModel} onChange={handleModelChange} activeProvider={activeProvider} />
               <GraphAssistToggle
                 enabled={graphAssistEnabled}
                 disabled={isLoading || !canChat}
@@ -788,7 +789,6 @@ export default function SessionView({
                 className="flex items-center gap-2 px-4 py-1.5 rounded-2xl border border-border bg-surface-2 shadow-lg transition-colors focus-within:border-text-muted"
                 style={{ boxShadow: '0 0 20px rgba(0, 0, 0, 0.5), 0 0 2px rgba(255, 255, 255, 0.03)' }}
               >
-                <ModelSelector activeModel={selectedModel} onChange={handleModelChange} activeProvider={activeProvider} />
                 <GraphAssistToggle
                   enabled={graphAssistEnabled}
                   disabled={isLoading || !canChat}

@@ -79,6 +79,13 @@ class QueryProcessorScoredIntentTests(unittest.TestCase):
         self.assertGreaterEqual(result["intent_scores"]["ARCHITECTURE"], 0.85)
         self.assertLess(result["intent_scores"]["FILE"], result["intent_scores"]["ARCHITECTURE"])
 
+    def test_behavior_question_does_not_promote_question_word_symbol(self) -> None:
+        result = query_processor.process_query("How are batch errors caught?")
+
+        self.assertNotIn("How", result["entities"]["symbols"])
+        self.assertIn(result["primary_intent"], {"EXPLANATION", "TRACE"})
+        self.assertGreaterEqual(result["intent_scores"]["EXPLANATION"], 0.86)
+
     def test_injects_auth_flow_symbols_for_varied_lifecycle_wording(self) -> None:
         result = query_processor.process_query("how does authentication cookie lifecycle work")
     

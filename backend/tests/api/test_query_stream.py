@@ -154,7 +154,7 @@ def test_query_stream_abort():
                 return True
             return False
             
-        with patch("fastapi.Request.is_disconnected", side_effect=mock_is_disconnected):
+        with patch("starlette.requests.Request.is_disconnected", side_effect=mock_is_disconnected):
             client.cookies.set("codeseek_session", "dummy")
             response = client.post(
                 "/api/v1/query/stream",

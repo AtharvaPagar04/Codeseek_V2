@@ -113,11 +113,22 @@ KNOWN_SERVICE_TERMS = {
 }
 
 STOPWORDS = {
-    "where",
+    "How",
+    "how",
+    "Are",
+    "are",
+    "Is",
+    "is",
+    "Why",
+    "why",
+    "Does",
+    "does",
+    "What",
     "what",
+    "Where",
+    "where",
     "which",
     "when",
-    "does",
     "from",
     "with",
     "this",
@@ -611,6 +622,12 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
 
     indexing_markers = _has_indexing_explanation_markers(lower)
     retrieval_markers = _has_retrieval_explanation_markers(lower)
+    behavior_explanation_starter = lower.startswith((
+        "how are ",
+        "how does ",
+        "why does ",
+        "explain how ",
+    ))
 
     if overview_markers:
         scores["OVERVIEW"] = 0.86
@@ -649,6 +666,12 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
         scores["FILE"] = 0.82
     if any(phrase in lower for phrase in ("explain", "how does", "what does", "walk me through")):
         scores["EXPLANATION"] = 0.72
+    if behavior_explanation_starter:
+        scores["EXPLANATION"] = max(scores["EXPLANATION"], 0.86)
+        if any(term in lower for term in ("trace", "flow", "caught", "handled", "passes through", "call path", "step by step")):
+            scores["TRACE"] = max(scores["TRACE"], 0.82)
+        if not (explicit_lookup or explicit_code_request or has_files or has_exact_terms):
+            scores["SYMBOL"] = min(scores["SYMBOL"], 0.35)
     if explicit_code_request:
         scores["CODE_REQUEST"] = 0.95
     if has_followup_markers:
@@ -678,7 +701,7 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
     )
     if explicit_lookup and has_files:
         scores["FILE"] = max(scores["FILE"], 0.9)
-    if explicit_lookup and explicit_config_lookup:
+    if (explicit_lookup or "configured" in lower or "configuration" in lower or "settings" in lower) and explicit_config_lookup:
         scores["CONFIG"] = max(scores["CONFIG"], 0.9)
     if explicit_lookup and (has_symbols or has_exact_terms) and not explicit_config_lookup:
         scores["SYMBOL"] = max(scores["SYMBOL"], 0.85)
@@ -807,7 +830,7 @@ def _extract_symbols(query: str) -> list[str]:
         c = candidate.strip()
         if not c:
             continue
-        if c.lower() in STOPWORDS:
+        if c in STOPWORDS or c.lower() in STOPWORDS:
             continue
         cleaned.append(c)
 

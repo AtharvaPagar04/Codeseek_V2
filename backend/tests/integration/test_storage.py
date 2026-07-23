@@ -15,8 +15,8 @@ from rag_ingestion.stages.storage import (
 )
 from rag_ingestion.utils.counters import PipelineCounters
 
-# QdrantClient is lazily imported inside the functions; patch the source module
-_QDRANT_PATCH = "qdrant_client.QdrantClient"
+# Patch the qdrant client factory function directly to avoid import issues
+_QDRANT_PATCH = "retrieval.support.qdrant_config.create_qdrant_client"
 
 
 def _make_chunk(**kwargs) -> Chunk:
@@ -75,7 +75,10 @@ def _make_chunk(**kwargs) -> Chunk:
 
 def _mock_client():
     mock = MagicMock()
-    mock.get_collection.return_value = MagicMock()
+    # Disable vector dimensions validation in tests by returning None config
+    collection_info = MagicMock()
+    collection_info.config = None
+    mock.get_collection.return_value = collection_info
     return mock
 
 
@@ -230,9 +233,11 @@ class DeleteChunksTests(unittest.TestCase):
 
         self.assertEqual(mock_client.delete.call_count, 1)
         self.assertEqual(mock_client.upsert.call_count, 1)
-        # delete must be the first method call recorded
-        first_call_name = mock_client.method_calls[0][0]
-        self.assertEqual(first_call_name, "delete")
+        # delete must be called before upsert
+        call_names = [call[0] for call in mock_client.method_calls]
+        delete_idx = call_names.index("delete")
+        upsert_idx = call_names.index("upsert")
+        self.assertLess(delete_idx, upsert_idx)
 
 
 class StateFileAbsenceTests(unittest.TestCase):

@@ -33,7 +33,7 @@ def test_unrelated_new_query_skips_previous_candidate_injection() -> None:
          patch("retrieval.search.searcher._inject_direct_topics_candidates", return_value=[]), \
          patch("retrieval.search.searcher._inject_code_topic_routing_candidates", return_value=[]), \
          patch("retrieval.search.searcher._merge_results", return_value=[]), \
-         patch("retrieval.search.searcher._inject_import_backing_candidates", side_effect=lambda _q, c: c), \
+         patch("retrieval.search.searcher._inject_import_backing_candidates", side_effect=lambda _q, c, _qi=None: c), \
          patch("retrieval.search.searcher._rerank_with_query_tokens", return_value=[]):
         results = search(query_info)
 

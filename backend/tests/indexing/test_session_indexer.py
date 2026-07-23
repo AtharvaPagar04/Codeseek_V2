@@ -25,6 +25,22 @@ def test_create_session_persists_indexing_state(monkeypatch, tmp_path: Path):
     assert all_sessions[0]["id"] == session["id"]
 
 
+def test_create_session_collection_uses_session_tenant(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("CODESEEK_DB_PATH", str(tmp_path / "codeseek.sqlite3"))
+    monkeypatch.setenv("CODESEEK_TENANT_ID", "local_prod")
+    monkeypatch.setattr(session_indexer, "WORKSPACE_ROOT", tmp_path / "repos")
+    monkeypatch.setattr(session_indexer, "_enqueue_index_job", lambda _session_id: None)
+
+    session = session_indexer.create_session(
+        repo_full_name="octocat/hello-world",
+        tenant_id="local",
+    )
+
+    assert "__local__" in session["collection"]
+    assert "__local_prod__" not in session["collection"]
+    assert "/local/" in session["repo_root"]
+
+
 def test_create_session_reuses_existing_repo_session(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("CODESEEK_DB_PATH", str(tmp_path / "codeseek.sqlite3"))
     monkeypatch.setattr(session_indexer, "WORKSPACE_ROOT", tmp_path / "repos")
@@ -97,11 +113,13 @@ def test_index_job_reuses_ready_session_for_same_commit(monkeypatch, tmp_path: P
         "local",
         user_id=user_one["id"],
     )
+    current_hash = session_indexer.current_embedding_metadata().get("embedding_config_hash", "")
     session_indexer._update_session(
         ready["id"],
         status="ready",
         last_indexed_commit="abc123",
         collection=ready["collection"],
+        embedding_config_hash=current_hash,
     )
 
     pending = session_indexer.create_session(
@@ -117,6 +135,39 @@ def test_index_job_reuses_ready_session_for_same_commit(monkeypatch, tmp_path: P
     assert refreshed["last_indexed_commit"] == "abc123"
 
 
+def test_index_job_recreates_empty_collection_to_avoid_stale_incremental_state(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("CODESEEK_DB_PATH", str(tmp_path / "codeseek.sqlite3"))
+    monkeypatch.setattr(session_indexer, "WORKSPACE_ROOT", tmp_path / "repos")
+    monkeypatch.setattr(session_indexer, "_clone_or_pull", lambda _url, _root, github_token="": "abc123")
+    monkeypatch.setattr("retrieval.session_indexer._embedding_config_status", lambda s: None)
+    monkeypatch.setattr(session_indexer, "_collection_point_count", lambda _collection: 0)
+
+    captured: dict[str, object] = {}
+
+    def fake_run_pipeline(_root, collection_name, **kwargs):
+        captured["collection_name"] = collection_name
+        captured["recreate_collection"] = kwargs.get("recreate_collection")
+        captured["tenant_id"] = kwargs.get("tenant_id")
+        return SimpleNamespace(
+            chunks_generated=1,
+            embeddings_stored=1,
+            embedding_provider_metadata={},
+        )
+
+    monkeypatch.setattr(session_indexer, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(session_indexer, "_enqueue_index_job", lambda _session_id: None)
+
+    session = session_indexer.create_session(
+        "octocat/hello-world",
+        "local",
+    )
+    session_indexer._index_job(session["id"])
+
+    assert captured["collection_name"] == session["collection"]
+    assert captured["recreate_collection"] is True
+    assert captured["tenant_id"] == "local"
+
+
 def test_delete_and_retry_helpers(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("CODESEEK_DB_PATH", str(tmp_path / "codeseek.sqlite3"))
     monkeypatch.setattr(session_indexer, "WORKSPACE_ROOT", tmp_path / "repos")
@@ -130,7 +181,7 @@ def test_delete_and_retry_helpers(monkeypatch, tmp_path: Path):
         def delete_collection(self, collection_name: str):
             deleted_collections.append(collection_name)
 
-    monkeypatch.setattr("retrieval.support.qdrant_config.create_qdrant_client", lambda **kw: FakeQdrantClient())
+    monkeypatch.setattr(session_indexer, "create_qdrant_client", lambda **kw: FakeQdrantClient())
 
     session = session_indexer.create_session("octocat/hello-world", "local")
     assert queued == [session["id"]]
@@ -254,7 +305,9 @@ def test_index_job_exception_marks_session_failed_and_preserves_error(monkeypatc
     session_indexer._index_job(session["id"])
 
     refreshed = session_indexer.get_session(session["id"])
-    assert refreshed is None
+    assert refreshed is not None
+    assert refreshed["status"] == "failed"
+    assert "index invalidation boom" in refreshed["error"]
 
 
 def test_stale_indexing_detection_requires_old_zero_progress_indexing(monkeypatch, tmp_path: Path):

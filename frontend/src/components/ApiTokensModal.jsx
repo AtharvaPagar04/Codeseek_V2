@@ -8,7 +8,7 @@ import {
   testEmbeddingConfig,
   deleteProviderCredential,
 } from '../utils/api';
-import { OPENAI_COMPATIBLE_EMBEDDING_MODELS, validateEmbeddingDimensions } from '../utils/validation.js';
+import { defaultEmbeddingModelForMode } from '../utils/validation.js';
 
 export default function ApiTokensModal({ onClose }) {
   const [mode, setMode] = useState('api');
@@ -17,8 +17,7 @@ export default function ApiTokensModal({ onClose }) {
       providerUrl: '',
       apiKey: '',
       llmModel: '',
-      embModel: '',
-      embDims: '',
+      embModel: defaultEmbeddingModelForMode('api'),
       hasProviderSecret: false,
       hasEmbeddingSecret: false,
     },
@@ -26,8 +25,7 @@ export default function ApiTokensModal({ onClose }) {
       providerUrl: 'http://localhost:11434',
       apiKey: '',
       llmModel: 'qwen2.5-coder:3b',
-      embModel: 'nomic-embed-text:latest',
-      embDims: '768',
+      embModel: defaultEmbeddingModelForMode('local'),
       hasProviderSecret: false,
       hasEmbeddingSecret: false,
     }
@@ -87,13 +85,11 @@ export default function ApiTokensModal({ onClose }) {
             if (emb && emb.profiles && emb.profiles.api) {
               const apiEmb = emb.profiles.api;
               next.api.providerUrl = apiEmb.base_url || '';
-              next.api.embModel = apiEmb.model || '';
-              next.api.embDims = apiEmb.dimensions ? String(apiEmb.dimensions) : '';
+              next.api.embModel = defaultEmbeddingModelForMode('api');
               next.api.hasEmbeddingSecret = apiEmb.has_secret || false;
             } else if (emb && emb.mode !== 'local') {
               next.api.providerUrl = emb.base_url || '';
-              next.api.embModel = emb.model || '';
-              next.api.embDims = emb.dimensions ? String(emb.dimensions) : '';
+              next.api.embModel = defaultEmbeddingModelForMode('api');
               next.api.hasEmbeddingSecret = emb.has_secret || false;
             }
 
@@ -105,13 +101,11 @@ export default function ApiTokensModal({ onClose }) {
             if (emb && emb.profiles && emb.profiles.local) {
               const localEmb = emb.profiles.local;
               next.local.providerUrl = localEmb.base_url || 'http://localhost:11434';
-              next.local.embModel = localEmb.model || 'nomic-embed-text:latest';
-              next.local.embDims = localEmb.dimensions ? String(localEmb.dimensions) : '768';
+              next.local.embModel = defaultEmbeddingModelForMode('local');
               next.local.hasEmbeddingSecret = localEmb.has_secret || false;
             } else if (emb && emb.mode === 'local') {
               next.local.providerUrl = emb.base_url || 'http://localhost:11434';
-              next.local.embModel = emb.model || 'nomic-embed-text:latest';
-              next.local.embDims = emb.dimensions ? String(emb.dimensions) : '768';
+              next.local.embModel = defaultEmbeddingModelForMode('local');
               next.local.hasEmbeddingSecret = emb.has_secret || false;
             }
 
@@ -164,19 +158,6 @@ export default function ApiTokensModal({ onClose }) {
       setError('LLM Model is required.');
       return false;
     }
-    if (!currentProfile.embModel.trim()) {
-      setError('Embedding Model is required.');
-      return false;
-    }
-
-    if (mode === 'api') {
-      const dimError = validateEmbeddingDimensions(mode, currentProfile.embModel, currentProfile.embDims);
-      if (dimError) {
-        setError(dimError);
-        return false;
-      }
-    }
-
     return true;
   };
 
@@ -190,12 +171,11 @@ export default function ApiTokensModal({ onClose }) {
         mode,
         provider: mode === 'local' ? 'local' : 'openai_compatible',
         baseUrl: currentProfile.providerUrl.trim().replace(/\/+$/, ''),
-        model: currentProfile.embModel.trim(),
+        model: defaultEmbeddingModelForMode(mode),
         apiKey: currentProfile.apiKey.trim(),
-        dimensions: currentProfile.embDims ? parseInt(currentProfile.embDims, 10) : undefined,
       };
       const result = await testEmbeddingConfig(payload);
-      testMsg = `Embedding config tested successfully! Dimensions: ${result.dimensions}, Model: ${result.model}. LLM test skipped.`;
+      testMsg = `Embedding config tested successfully with ${result.model || defaultEmbeddingModelForMode(mode)}. LLM test skipped.`;
       setSuccessMsg(testMsg);
     } catch (err) {
       setError(`Embedding test failed: ${err.message || 'Unknown error'}`);
@@ -230,16 +210,15 @@ export default function ApiTokensModal({ onClose }) {
         mode,
         provider: mode === 'local' ? 'local' : 'openai_compatible',
         baseUrl: url,
-        model: currentProfile.embModel.trim(),
+        model: defaultEmbeddingModelForMode(mode),
         apiKey: currentProfile.apiKey.trim(),
-        dimensions: currentProfile.embDims ? parseInt(currentProfile.embDims, 10) : undefined,
       };
       const updatedEmb = await saveEmbeddingConfig(payload);
       setActiveEmbConfig(updatedEmb);
 
       handleProfileChange('hasEmbeddingSecret', true);
 
-      setSuccessMsg('Configuration saved successfully. Note: changing embedding settings may require reindexing active sessions.');
+      setSuccessMsg('Configuration saved successfully. The default embedding model is used for indexing.');
       window.dispatchEvent(new Event('CODESEEK_PROVIDER_CHANGED'));
     } catch (err) {
       if (err.message && err.message.includes('401')) {
@@ -295,12 +274,10 @@ export default function ApiTokensModal({ onClose }) {
                       <span className="font-mono">{activeConfig.model}</span>
                     </div>
                   )}
-                  {activeEmbConfig?.model && (
-                    <div className="flex">
-                      <span className="w-24 text-text-muted">Emb Model:</span>
-                      <span className="font-mono">{activeEmbConfig.model}</span>
-                    </div>
-                  )}
+                  <div className="flex">
+                    <span className="w-24 text-text-muted">Embedding:</span>
+                    <span className="font-mono">{defaultEmbeddingModelForMode(mode)}</span>
+                  </div>
                   <div className="flex mt-2">
                     <span className="w-24 text-text-muted">Emb Valid:</span>
                     <span className={`font-mono ${activeEmbConfig?.model ? 'text-online' : 'text-warning'}`}>
@@ -354,61 +331,10 @@ export default function ApiTokensModal({ onClose }) {
 
             <div className="flex flex-col gap-1">
               <label className="text-2xs font-mono text-text-muted uppercase">Embedding Model</label>
-              <input
-                type="text"
-                value={currentProfile.embModel}
-                onChange={(e) => handleProfileChange('embModel', e.target.value)}
-                placeholder="e.g. text-embedding-3-small"
-                className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
-                required
-              />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <label className="text-2xs font-mono text-text-muted uppercase">Embedding Dimensions</label>
-              {(() => {
-                const modelName = currentProfile.embModel.trim();
-                let isKnownApi = false;
-                let allowed = [];
-                if (mode === 'api' && OPENAI_COMPATIBLE_EMBEDDING_MODELS[modelName]) {
-                  isKnownApi = true;
-                  allowed = OPENAI_COMPATIBLE_EMBEDDING_MODELS[modelName];
-                }
-
-                if (isKnownApi) {
-                  return (
-                    <select
-                      value={currentProfile.embDims || '0'}
-                      onChange={(e) => handleProfileChange('embDims', e.target.value)}
-                      className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-primary font-mono focus:outline-none focus:border-text-muted"
-                    >
-                      <option value="0">Auto (Recommended)</option>
-                      {allowed.map(d => (
-                        <option key={d} value={String(d)}>{d}</option>
-                      ))}
-                      {/* Hidden option in case the state has an invalid value so it doesn't default to the first option silently */}
-                      {currentProfile.embDims && currentProfile.embDims !== '0' && !allowed.includes(parseInt(currentProfile.embDims, 10)) && (
-                        <option value={currentProfile.embDims} className="hidden">{currentProfile.embDims} (Invalid)</option>
-                      )}
-                    </select>
-                  );
-                } else {
-                  return (
-                    <input
-                      type="number"
-                      value={currentProfile.embDims}
-                      onChange={(e) => handleProfileChange('embDims', e.target.value)}
-                      placeholder="Optional (e.g. 1536)"
-                      className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-primary placeholder-text-muted font-mono focus:outline-none focus:border-text-muted"
-                    />
-                  );
-                }
-              })()}
-              <p className="text-[11px] text-text-muted mt-0.5">Leave empty or Auto unless your embedding model requires a fixed dimension.</p>
-              <p className="text-[11px] text-warning mt-1.5 flex gap-1 items-start bg-warning/10 p-2 rounded-md border border-warning/20">
-                <span className="shrink-0 text-sm leading-none">⚠</span>
-                <span>Changing embedding model or dimensions requires reindexing existing repositories.</span>
-              </p>
+              <div className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs text-text-secondary font-mono">
+                {defaultEmbeddingModelForMode(mode)}
+              </div>
+              <p className="text-[11px] text-text-muted mt-0.5">CodeSeek uses this default embedding model for repository indexing.</p>
             </div>
           </form>
         </div>

@@ -53,6 +53,23 @@ _client = None
 _qdrant_failures = 0
 _qdrant_circuit_open_until = 0.0
 _lexical_indexes: dict[str, "_LexicalIndex"] = {}
+LEXICAL_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "for",
+    "how",
+    "in",
+    "is",
+    "of",
+    "the",
+    "to",
+    "what",
+    "where",
+    "why",
+    "does",
+}
 IMPORT_TRACE_DEPTH_LIMIT = 3
 TRACE_EXPANDED_CHUNKS_LIMIT = 6
 PREVIOUS_CANDIDATE_BLOCKED_INTENTS = {
@@ -183,18 +200,33 @@ CODE_REQUEST_TOPIC_ROUTES = (
             "evaluation diagnostics endpoint",
             "show me the evaluation report api code",
             "show me the latest evaluation report code",
+            "index preview api endpoint code",
+            "index preview endpoint code",
+            "show me the index preview API endpoint code",
+            "index preview api",
+            "index preview endpoint",
         ],
         "target_paths": [
             "backend/retrieval/api_service.py",
             "backend/retrieval/support/eval_reports.py",
+            "backend/retrieval/support/session_indexer.py",
+            "backend/retrieval/session_indexer.py",
         ],
         "target_symbols": [
             "get_latest_evaluation_report_v1",
             "get_latest_evaluation_report",
+            "get_index_preview_v1",
+            "get_session_index_preview_v1",
+            "get_index_preview",
+            "get_session_index_preview",
         ],
         "symbol_path_hints": {
             "get_latest_evaluation_report_v1": "backend/retrieval/api_service.py",
             "get_latest_evaluation_report": "backend/retrieval/support/eval_reports.py",
+            "get_index_preview_v1": "backend/retrieval/api_service.py",
+            "get_session_index_preview_v1": "backend/retrieval/api_service.py",
+            "get_index_preview": "backend/retrieval/support/session_indexer.py",
+            "get_session_index_preview": "backend/retrieval/session_indexer.py",
         },
         "exclude_paths": [
             "backend/retrieval/search/searcher.py",
@@ -2002,9 +2034,10 @@ def _lexical_tokens(text: str) -> list[str]:
     raw = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{1,}", text.lower())
     tokens: list[str] = []
     for token in raw:
-        tokens.append(token)
+        if token not in LEXICAL_STOPWORDS:
+            tokens.append(token)
         if "_" in token:
-            tokens.extend(part for part in token.split("_") if len(part) > 1)
+            tokens.extend(part for part in token.split("_") if len(part) > 1 and part not in LEXICAL_STOPWORDS)
     return tokens
 
 
@@ -2969,10 +3002,15 @@ def config_source_boost(candidate: dict, query: str, intent: str) -> float:
     q = (query or "").lower()
     intent = (intent or "").upper()
 
-    if intent != "CONFIG":
+    if intent not in {"CONFIG", "ENV"} and not any(term in q for term in ("config", "configuration", "environment", "env var", "env vars")):
         return 0.0
 
-    path = (candidate.get("relative_path") or "").lower()
+    path = (
+        candidate.get("relative_path")
+        or candidate.get("file_path")
+        or candidate.get("normalized_path")
+        or ""
+    ).lower()
     content = (
         candidate.get("content")
         or candidate.get("content_excerpt")
@@ -2986,17 +3024,24 @@ def config_source_boost(candidate: dict, query: str, intent: str) -> float:
     filename = path.split("/")[-1]
     boost = 0.0
 
-    # Boost files whose path basename is config.py or settings.py
-    if filename in {"config.py", "settings.py"}:
+    # Boost files whose basename signals configuration.
+    if filename in {"config.py", "settings.py", ".env", ".env.example"}:
         boost += 0.40
+    elif any(term in filename for term in ("config", "settings", "secret", "credential")):
+        boost += 0.30
+    elif filename.endswith((".yaml", ".yml", ".toml")):
+        boost += 0.20
 
     # Boost chunks containing environment/config APIs or constants
     env_terms = [
         "os.getenv",
         "os.environ",
-        "retrieval_",
-        "ollama_",
-        "qdrant_",
+        "process.env",
+        "dotenv",
+        "settings",
+        "config",
+        "secret",
+        "credential",
         "database",
         "api_key"
     ]
@@ -3004,11 +3049,59 @@ def config_source_boost(candidate: dict, query: str, intent: str) -> float:
         if term in content:
             boost += 0.08
 
-    # If the path actually matches backend/retrieval/config.py, we can add a strong boost
-    if path == "backend/retrieval/config.py":
-        boost += 0.25
-
     return min(boost, 0.65)
+
+
+def behavior_support_file_penalty(filename: str, query: str) -> float:
+    """Down-rank generic support modules for behavior questions unless explicitly named."""
+    filename = (filename or "").lower()
+    query = re.sub(r"\s+", " ", (query or "").lower()).strip()
+    support_terms = ("logging", "config", "settings", "display", "errors")
+    matched_terms = [term for term in support_terms if term in filename]
+    if not matched_terms:
+        return 0.0
+
+    filename_without_extension = filename.rsplit(".", 1)[0]
+    explicitly_named = filename in query or filename_without_extension in query
+    explicit_domain_patterns = {
+        "logging": ("logging", "logger", "log setup", "audit formatter"),
+        "config": ("configuration", "config setup", "configure the", "config file"),
+        "settings": ("settings", "application settings"),
+        "display": ("display setup", "output formatting", "display formatting"),
+        "errors": ("error module", "errors module", "error class", "exception definitions"),
+    }
+    explicitly_requested = explicitly_named or any(
+        any(pattern in query for pattern in explicit_domain_patterns[term])
+        for term in matched_terms
+    )
+    if explicitly_requested:
+        return 0.0
+
+    return -0.75
+
+
+def heuristic_metadata_score_multiplier(candidate: dict, query: str, intent: str, response_mode: str = "") -> float:
+    """Apply repo-agnostic metadata boosts for broad config and overview queries."""
+    del query
+    intent = (intent or "").upper()
+    mode = (response_mode or "").lower()
+    path = str(
+        candidate.get("relative_path")
+        or candidate.get("file_path")
+        or candidate.get("normalized_path")
+        or ""
+    ).lower()
+    filename = path.rsplit("/", 1)[-1]
+
+    if intent in {"CONFIG", "ENV"}:
+        if any(term in path for term in ("config", "settings", ".env", "secrets", "credentials")):
+            return 1.5
+
+    if intent in {"OVERVIEW", "ARCHITECTURE"} or mode in {"overview", "architecture_summary"}:
+        if "readme" in filename or "architecture" in path:
+            return 1.5
+
+    return 1.0
 
 
 def classify_source_role(relative_path: str) -> str:
@@ -3195,7 +3288,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
             domain_boost = min(float(item.get("domain_boost_score", 0.0)), 15.0) / 30.0
             vector_score = max(vector_score, 0.40 + domain_boost)
         elif vector_score == 0.0 and item.get("fusion_score", 0.0) > 0.0:
-            vector_score = min(0.65, 0.50 + 5.0 * float(item.get("fusion_score", 0.0)))
+            vector_score = min(0.40, 0.20 + 2.0 * float(item.get("fusion_score", 0.0)))
 
         exact_match_score = min(float(item.get("exact_entity_score", 0.0)) / 4.0, 1.0)
         label_boost = compute_label_boost(item.get("labels", []), query_profile)
@@ -3271,6 +3364,25 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
         path_lower = relative_path.lower()
         q_lower = raw_query.lower()
         is_ui_query = any(term in q_lower for term in ("frontend", "ui", "component", "dashboard", "message bubble", "source card"))
+        error_handling_query = bool(
+            set(re.findall(r"[a-z]+", q_lower))
+            & {"error", "errors", "catch", "catches", "caught", "exception", "exceptions", "fail", "fails", "failed", "failure", "handle", "handles", "handled", "handling"}
+        )
+        behavior_intent = (
+            primary_intent in {"TRACE", "EXPLANATION"}
+            or reranker_intent in {"TRACE", "EXPLANATION"}
+            or (
+                error_handling_query
+                and (
+                    primary_intent in {"SEMANTIC", "CODE_REQUEST", "SYMBOL"}
+                    or reranker_intent in {"SEMANTIC", "CODE_REQUEST", "SYMBOL"}
+                )
+            )
+        )
+        if behavior_intent:
+            support_penalty = behavior_support_file_penalty(filename, q_lower)
+            if support_penalty:
+                response_quality_deboost += support_penalty
         if response_mode == "overview" or reranker_intent == "OVERVIEW":
             is_readme = path_lower.rsplit("/", 1)[-1].startswith("readme")
             is_doc = path_lower.startswith("docs/") or "/docs/" in path_lower or path_lower.endswith(".md")
@@ -3561,6 +3673,12 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
                 item["feature_routing_hit"] = True
                 item["matched_features"] = dyn_meta["matched_features"]
         final_score += dyn_boost + dyn_penalty
+        final_score *= heuristic_metadata_score_multiplier(
+            item,
+            raw_query,
+            reranker_intent,
+            response_mode=response_mode,
+        )
 
         final_score *= artifact_penalty_for_intent(relative_path, reranker_intent, previous_files)
         if item.get("injected_from_previous_turn"):
@@ -3832,18 +3950,44 @@ def _repository_overview_candidates() -> list[dict]:
         rs_hits, _ = repo_summary_response
         repo_summary_payloads = [h.payload or {} for h in rs_hits if h.payload]
 
-    # --- Step 2: scroll first 400 chunks for other high-priority overview files
+    # --- Step 2: target README metadata before the bounded overview scan.
+    readme_response = _qdrant_call(lambda: client.scroll(
+        collection_name=collection,
+        scroll_filter=Filter(should=[
+            FieldCondition(
+                key="relative_path",
+                match=MatchAny(any=["README.md", "Readme.md", "readme.md"]),
+            ),
+            FieldCondition(
+                key="filename",
+                match=MatchAny(any=["README.md", "Readme.md", "readme.md"]),
+            ),
+            FieldCondition(
+                key="file_type",
+                match=MatchAny(any=["readme", "Readme", "README"]),
+            ),
+        ]),
+        limit=max(12, TOP_K_AFTER_MERGE),
+        with_payload=True,
+    ))
+    readme_payloads: list[dict] = []
+    if readme_response is not None:
+        readme_hits, _ = readme_response
+        readme_payloads = [dict(hit.payload or {}) for hit in readme_hits if hit.payload]
+
+    # --- Step 3: bounded scan for other high-priority overview files.
     response = _qdrant_call(lambda: client.scroll(
         collection_name=collection,
         limit=400,
         with_payload=True,
     ))
     if response is None:
-        # Fall back to repo_summary only if available
-        return [p for p in repo_summary_payloads if p.get("chunk_id")]
+        payloads = []
+    else:
+        hits, _ = response
+        payloads = [hit.payload or {} for hit in hits]
 
-    hits, _ = response
-    payloads = [hit.payload or {} for hit in hits]
+    payloads = readme_payloads + payloads
     payloads = [p for p in payloads if p.get("chunk_id") and p.get("chunk_type") != "repo_summary"]
     payloads.sort(
         key=lambda item: (
@@ -3854,16 +3998,22 @@ def _repository_overview_candidates() -> list[dict]:
     )
 
     chosen: list[dict] = []
+    seen_chunk_ids: set[str] = set()
     seen_files: set[str] = set()
 
     # Repo_summary always goes first (priority=100, handled separately)
     for rs_payload in repo_summary_payloads:
-        if rs_payload.get("chunk_id"):
+        chunk_id = str(rs_payload.get("chunk_id", "")).strip()
+        if chunk_id:
             chosen.append(rs_payload)
+            seen_chunk_ids.add(chunk_id)
             seen_files.add("__repo_summary__.md")
 
     for payload in payloads:
         if _exclude_overview_payload(payload):
+            continue
+        chunk_id = str(payload.get("chunk_id", "")).strip()
+        if chunk_id in seen_chunk_ids:
             continue
         score = _overview_priority(payload)
         if score <= 0:
@@ -3872,6 +4022,7 @@ def _repository_overview_candidates() -> list[dict]:
         if relative_path in seen_files and score < 16:
             continue
         chosen.append(payload)
+        seen_chunk_ids.add(chunk_id)
         seen_files.add(relative_path)
         if len(chosen) >= max(6, TOP_K_AFTER_MERGE):
             break
@@ -4067,7 +4218,7 @@ def _fetch_import_symbol_chunks(
 def _build_imported_symbol_payload(path: Path, relative_path: str, imported_name: str) -> dict | None:
     from retrieval.generation.code_answers import _extract_export_block
 
-    block = _extract_export_block(path, imported_name)
+    block = _extract_export_block(path, imported_name, recursive=False)
     if not block:
         return None
 

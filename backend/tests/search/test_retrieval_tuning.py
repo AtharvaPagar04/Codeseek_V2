@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import patch, MagicMock
-from retrieval.search.searcher import _rerank_with_query_tokens
+from retrieval.search.searcher import _rerank_with_query_tokens, behavior_support_file_penalty
 from retrieval.generation.code_answers import build_overview_answer
 
 class TestRetrievalTuning(unittest.TestCase):
@@ -50,10 +50,11 @@ class TestRetrievalTuning(unittest.TestCase):
         
         answer = build_overview_answer(raw_query, sources, chunks)
         
-        # Verify answer mentions CodeSeek and repository
+        # Verify answer stays grounded in retrieved context and does not add a hardcoded product overview.
         self.assertIn("CodeSeek", answer)
         self.assertIn("repository", answer.lower())
-        self.assertIn("indexes", answer.lower())
+        self.assertIn("Overview synthesized from indexed repository metadata and implementation files.", answer)
+        self.assertNotIn("repository-grounded RAG", answer)
 
     def test_index_health_query_boosting(self) -> None:
         # Query: "what does the index health check validate?"
@@ -157,6 +158,40 @@ class TestRetrievalTuning(unittest.TestCase):
         
         # provider_health has higher vector score and shouldn't be overridden by index health boost
         self.assertEqual(results[0]["chunk_id"], "c_ph")
+
+    def test_lexical_only_hits_use_lower_synthetic_vector_confidence(self) -> None:
+        raw_query = "unmatched phrase"
+        lexical_only = {
+            "chunk_id": "lex",
+            "relative_path": "bot/support.py",
+            "fusion_score": 1 / 61,
+            "retrieval_sources": ["lexical"],
+            "labels": [],
+        }
+
+        results = _rerank_with_query_tokens(
+            raw_query,
+            [lexical_only],
+            {"primary_intent": "SEMANTIC", "entities": {"symbols": [], "files": []}},
+        )
+
+        self.assertEqual(results[0]["chunk_id"], "lex")
+        self.assertAlmostEqual(results[0]["retrieval_score"], 0.70 * (0.20 + 2.0 * (1 / 61)))
+        self.assertLess(results[0]["final_score"], 0.20)
+
+    def test_behavior_support_file_penalty_requires_explicit_request(self) -> None:
+        self.assertEqual(
+            behavior_support_file_penalty("logging_config.py", "how are batch errors caught"),
+            -0.75,
+        )
+        self.assertEqual(
+            behavior_support_file_penalty("logging_config.py", "what function catches the error"),
+            -0.75,
+        )
+        self.assertEqual(
+            behavior_support_file_penalty("logging_config.py", "how is logging configured"),
+            0,
+        )
 
 if __name__ == "__main__":
     unittest.main()

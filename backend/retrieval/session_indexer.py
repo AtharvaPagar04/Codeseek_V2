@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import threading
 import uuid
@@ -178,6 +179,31 @@ def _slug(value: str) -> str:
     return "".join(out).strip("_") or "unknown"
 
 
+def _path_is_under_workspace(path: Path) -> bool:
+    try:
+        path.resolve().relative_to(WORKSPACE_ROOT.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _remaining_sessions_share(
+    sessions: list[dict],
+    *,
+    session_id: str,
+    repo_root: str = "",
+    collection: str = "",
+) -> bool:
+    for session in sessions:
+        if session.get("id") == session_id:
+            continue
+        if repo_root and str(session.get("repo_root", "")) == repo_root:
+            return True
+        if collection and str(session.get("collection", "")) == collection:
+            return True
+    return False
+
+
 def _load_state() -> dict:
     init_db()
     with db_cursor() as (_conn, cursor):
@@ -264,6 +290,7 @@ def delete_session(session_id: str, force: bool = False) -> dict:
 
         warnings: list[str] = []
         qdrant_collection_deleted: bool | None = None
+        repo_workspace_deleted: bool | None = None
 
         # Delete all DB records for this session cleanly without using _save_state
         # which would otherwise wipe all sessions and trigger cascading deletes.
@@ -310,20 +337,71 @@ def delete_session(session_id: str, force: bool = False) -> dict:
         _session_provider_configs.pop(session_id, None)
         _jobs.pop(session_id, None)
 
+        remaining_sessions = _load_state().get("sessions", [])
+
+        # Local workspace cleanup. A deleted session must not leave stale
+        # incremental state behind when its Qdrant collection has been removed.
+        repo_root = str(session_to_delete.get("repo_root", "") or "")
+        if repo_root:
+            repo_path = Path(repo_root)
+            if _remaining_sessions_share(
+                remaining_sessions,
+                session_id=session_id,
+                repo_root=repo_root,
+            ):
+                repo_workspace_deleted = None
+                warnings.append(
+                    f"Repository workspace '{repo_root}' was not deleted because another session still references it."
+                )
+            elif repo_path.exists() and _path_is_under_workspace(repo_path):
+                try:
+                    shutil.rmtree(repo_path, ignore_errors=False)
+                    repo_workspace_deleted = True
+                except Exception as ws_exc:
+                    from retrieval.support.observability import sanitize_credentials_in_string
+                    repo_workspace_deleted = False
+                    warnings.append(
+                        sanitize_credentials_in_string(
+                            f"Repository workspace '{repo_root}' could not be deleted: {ws_exc}. "
+                            "Remove its .rag_ingestion_state.json before re-indexing this repo."
+                        )
+                    )
+            elif repo_path.exists():
+                repo_workspace_deleted = None
+                warnings.append(
+                    f"Repository workspace '{repo_root}' was not deleted because it is outside the managed workspace."
+                )
+            else:
+                repo_workspace_deleted = False
+
         # Qdrant collection cleanup
         collection = session_to_delete.get("collection", "")
         if collection:
             # Safety: only delete if collection name is session-specific
             # (contains session_id or is not a shared/default name)
             from retrieval.support.isolation import expected_collection_name
-            repo_root = session_to_delete.get("repo_root", "")
-            expected = expected_collection_name(repo_root) if repo_root else ""
+            expected = (
+                expected_collection_name(
+                    repo_root,
+                    tenant=str(session_to_delete.get("tenant_id", "") or "") or None,
+                )
+                if repo_root else ""
+            )
             is_safe = (
                 session_id in collection
                 or (expected and collection == expected)
                 or collection.startswith("repository_chunks__")
             )
-            if is_safe:
+            if _remaining_sessions_share(
+                remaining_sessions,
+                session_id=session_id,
+                collection=collection,
+            ):
+                qdrant_collection_deleted = None
+                warnings.append(
+                    f"Qdrant collection '{collection}' was not deleted because another session still references it."
+                )
+            elif is_safe:
                 try:
                     client = create_qdrant_client(
                         timeout=5.0,
@@ -354,6 +432,7 @@ def delete_session(session_id: str, force: bool = False) -> dict:
             "deleted": True,
             "session_id": session_id,
             "qdrant_collection_deleted": qdrant_collection_deleted,
+            "repo_workspace_deleted": repo_workspace_deleted,
             "warnings": warnings,
         }
 
@@ -420,12 +499,13 @@ def create_session(
     owner, _, name = repo_full_name.partition("/")
     if not owner or not name:
         raise ValueError("repo_full_name must be in 'owner/name' format")
+    normalized_tenant = tenant_id.strip() or "local"
     repo_slug = _slug(f"{owner}_{name}")
-    repo_root = WORKSPACE_ROOT / _slug(tenant_id) / repo_slug
-    collection = expected_collection_name(str(repo_root))
+    repo_root = WORKSPACE_ROOT / _slug(normalized_tenant) / repo_slug
+    collection = expected_collection_name(str(repo_root), tenant=normalized_tenant)
     session = {
         "id": uuid.uuid4().hex,
-        "tenant_id": tenant_id,
+        "tenant_id": normalized_tenant,
         "user_id": user_id,
         "repo_full_name": repo_full_name,
         "repo_url": repo_url or f"https://github.com/{repo_full_name}.git",
@@ -460,7 +540,7 @@ def create_session(
         existing = _find_existing_session(
             state.get("sessions", []),
             repo_full_name=repo_full_name,
-            tenant_id=tenant_id,
+            tenant_id=normalized_tenant,
             user_id=user_id,
         )
         if existing:
@@ -804,15 +884,18 @@ def _index_job(session_id: str) -> None:
         except Exception:
             branch_name = session.get("current_branch", "")
 
+        recreate_collection = _collection_point_count(session["collection"]) <= 0
         counters = run_pipeline(
             str(repo_root),
             collection_name=session["collection"],
+            recreate_collection=recreate_collection,
             enable_chunk_descriptions=bool(session.get("enable_chunk_descriptions", False)),
             provider_config=provider_config,
             event_callback=_emit,
             session_id=session_id,
             commit_sha=commit,
             branch_name=branch_name,
+            tenant_id=str(session.get("tenant_id", "") or "") or None,
         )
         invalidate_lexical_index(session["collection"])
         stored = int(getattr(counters, "embeddings_stored", 0))
@@ -1426,6 +1509,7 @@ def _index_latest_job(session_id: str, user_id: str, job_id: str | None = None) 
             provider_config=provider_config,
             event_callback=_emit,
             recreate_collection=True,
+            tenant_id=str(session.get("tenant_id", "") or "") or None,
         )
         invalidate_lexical_index(session["collection"])
         stored = int(getattr(counters, "embeddings_stored", 0))
@@ -2438,6 +2522,7 @@ def run_incremental_reindex(session_id: str, job_id: str | None = None) -> None:
             session_id=session_id,
             commit_sha=commit,
             branch_name=branch_name,
+            tenant_id=str(session.get("tenant_id", "") or "") or None,
             added_files=plan["added_files"],
             modified_files=plan["modified_files"],
             deleted_files=plan["deleted_files"],

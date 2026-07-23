@@ -199,21 +199,22 @@ class TestUnloadEmbeddingModel:
     """unload_embedding_model must clear the global cache and call gc."""
 
     def test_clears_global_model_ref(self):
-        """After calling unload_embedding_model, _model must be None."""
+        """After calling unload_embedding_model, local models must be cleared."""
+        from retrieval.support.embedding_provider import _LOCAL_MODELS
         import rag_ingestion.stages.embedder as emb
 
-        # Inject a fake model so there is something to unload
-        emb._model = MagicMock()
+        _LOCAL_MODELS[("model", "cpu")] = MagicMock()
 
         with patch("rag_ingestion.stages.embedder.clear_python_cuda_cache") as mock_clear:
             emb.unload_embedding_model()
-            assert emb._model is None
+            assert len(_LOCAL_MODELS) == 0
             mock_clear.assert_called_once_with("after embedding model unload")
 
     def test_no_op_when_model_not_loaded(self):
         """unload_embedding_model must not crash when model is already None."""
+        from retrieval.support.embedding_provider import _LOCAL_MODELS
         import rag_ingestion.stages.embedder as emb
-        emb._model = None
+        _LOCAL_MODELS.clear()
 
         with patch("rag_ingestion.stages.embedder.clear_python_cuda_cache") as mock_clear:
             emb.unload_embedding_model()

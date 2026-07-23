@@ -193,7 +193,7 @@ class TestPipelineEventCallback:
         (repo_dir / "app.py").write_text("def foo():\n    return 42\n")
 
         # Stub out stages that need external services.
-        monkeypatch.setattr(pipeline_main, "embed_chunks", lambda chunks, counters: chunks)
+        monkeypatch.setattr(pipeline_main, "embed_chunks", lambda chunks, counters, **kwargs: chunks)
         monkeypatch.setattr(pipeline_main, "store_chunks",
                             lambda chunks, counters, collection_name=None, **kwargs: setattr(counters, "embeddings_stored", len(chunks)))
         monkeypatch.setattr(pipeline_main, "validate_collection_binding", lambda *a: None)

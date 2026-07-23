@@ -64,6 +64,7 @@ def run_pipeline(
     session_id: str | None = None,
     commit_sha: str | None = None,
     branch_name: str | None = None,
+    tenant_id: str | None = None,
 ) -> PipelineCounters:
     """Run all ingestion stages in order."""
     from rag_ingestion.config import (
@@ -105,9 +106,14 @@ def run_pipeline(
 
     repository = load_repository(source)
     selected_collection = collection_name or expected_collection_name(
-        repository["repository_root"]
+        repository["repository_root"],
+        tenant=tenant_id,
     )
-    validate_collection_binding(selected_collection, repository["repository_root"])
+    validate_collection_binding(
+        selected_collection,
+        repository["repository_root"],
+        tenant=tenant_id,
+    )
 
     # --- Discovery ---
     discovered_files = discover_files(repository["repository_root"], counters)
@@ -470,6 +476,7 @@ def run_incremental_pipeline(
     session_id: str | None = None,
     commit_sha: str | None = None,
     branch_name: str | None = None,
+    tenant_id: str | None = None,
     added_files: list[str] | None = None,
     modified_files: list[str] | None = None,
     deleted_files: list[str] | None = None,
@@ -509,9 +516,14 @@ def run_incremental_pipeline(
 
     repository = load_repository(source)
     selected_collection = collection_name or expected_collection_name(
-        repository["repository_root"]
+        repository["repository_root"],
+        tenant=tenant_id,
     )
-    validate_collection_binding(selected_collection, repository["repository_root"])
+    validate_collection_binding(
+        selected_collection,
+        repository["repository_root"],
+        tenant=tenant_id,
+    )
 
     targets = set(added_files or []) | set(modified_files or [])
     if not targets and not (deleted_files or []):

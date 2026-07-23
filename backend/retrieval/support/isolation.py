@@ -14,7 +14,12 @@ def _slug(value: str) -> str:
     return value or "unknown"
 
 
-def tenant_id() -> str:
+def tenant_id(value: str | None = None) -> str:
+    if value is not None:
+        return _slug(value)
+    scoped = os.getenv("RETRIEVAL_TENANT_ID", "").strip()
+    if scoped:
+        return _slug(scoped)
     return _slug(os.getenv("CODESEEK_TENANT_ID", "local"))
 
 
@@ -22,8 +27,8 @@ def repo_id(repo_root: str) -> str:
     return _slug(Path(repo_root).resolve().name)
 
 
-def expected_collection_name(repo_root: str) -> str:
-    return f"repository_chunks__{tenant_id()}__{repo_id(repo_root)}"
+def expected_collection_name(repo_root: str, *, tenant: str | None = None) -> str:
+    return f"repository_chunks__{tenant_id(tenant)}__{repo_id(repo_root)}"
 
 
 def strict_isolation_enabled() -> bool:
@@ -31,10 +36,15 @@ def strict_isolation_enabled() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
-def validate_collection_binding(collection_name: str, repo_root: str) -> None:
+def validate_collection_binding(
+    collection_name: str,
+    repo_root: str,
+    *,
+    tenant: str | None = None,
+) -> None:
     if not strict_isolation_enabled():
         return
-    expected = expected_collection_name(repo_root)
+    expected = expected_collection_name(repo_root, tenant=tenant)
     if collection_name != expected:
         raise ValueError(
             "Collection/repo isolation mismatch. "

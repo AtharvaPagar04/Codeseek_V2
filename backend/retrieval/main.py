@@ -10,7 +10,6 @@ from retrieval.generation.assembler import assemble, assemble_for_reasoning, int
 from retrieval.generation.code_answers import (
     build_architecture_answer,
     build_docs_summary_answer,
-    build_explanation_answer,
     build_code_answer,
     build_code_snippet_answer,
     collect_rendered_code_snippet_sources,
@@ -508,6 +507,16 @@ def should_return_low_confidence_response(
 ) -> bool:
     if str(evidence_confidence.get("level") or "").lower() != "weak":
         return False
+    user_query = str(query_info.get("user_query") or query_info.get("raw_query") or "").lower().strip()
+    is_follow_up = (
+        bool(query_info.get("is_followup"))
+        or bool(query_info.get("follow_up_to"))
+        or bool(query_info.get("follow_up_resolved_to"))
+        or "explain" in user_query
+        or user_query in {"that", "this", "explain", "explain that", "explain this", "what is this", "how does it work"}
+    )
+    if is_follow_up:
+        return False
     if any(
         c.get("exact_retrieval_hit")
         or c.get("retrieval_source") in {"exact_entity", "local_content", "code_topic_routing", "auth_routing"}
@@ -806,6 +815,14 @@ def post_process_answer_and_sources(
     answer = "\n".join(lines)
     answer = _strip_manual_sources_footer(answer)
 
+    # Older deterministic flow templates and some model completions can expose
+    # evidence bookkeeping. Keep that in logs/trace data, not user responses.
+    answer = re.sub(
+        r"(?im)^[ \t]*Evidence status:[ \t]*(?:\n[ \t]*[*-][ \t]*.*)*",
+        "",
+        answer,
+    ).rstrip()
+
     # 1.5. Flow summary formatting post-processing
     if "The flow appears to be:" in answer or "Evidence status:" in answer:
         # Match lines starting with optional whitespace followed by * file: or * role:
@@ -821,14 +838,6 @@ def post_process_answer_and_sources(
             
         answer = re.sub(r"(?m)^\s*\*?\s*file:\s*(.*)", wrap_file_path, answer)
         answer = re.sub(r"(?m)^\s*\*?\s*role:\s*(.*)", r"   * role: \1", answer)
-
-    # 2. Fix evidence status contradiction
-    # If the answer contains "Evidence status:"
-    if "Evidence status:" in answer:
-        has_missing = "missing:" in answer
-        if has_missing:
-            # Replace complete with partial in a case-insensitive manner
-            answer = re.sub(r"([*|-]\s+)complete", r"\1partial", answer, flags=re.IGNORECASE)
 
     # 3. Remove docs/tests/scratch from visible source list when implementation sources are complete.
     implementation_sources = []
@@ -956,17 +965,40 @@ def post_process_answer_and_sources(
         ]
     final_sources = _dedupe_sources(final_sources)
 
-    # 4. Prevent source files not in selected context from appearing in the final answer
+    # 4. Prevent source files not in selected context from appearing in the final answer.
+    # Only drop lines where the ENTIRE meaningful content is a bare file reference —
+    # never drop prose lines that happen to mention a path inside a longer sentence.
     allowed_paths = {src.get("relative_path") for src in final_sources if src.get("relative_path")}
-    answer = _filter_lines_outside_code_blocks(
-        answer,
-        keep_line=lambda line: all(
-            any(
+    def _is_bare_path_line(line: str) -> bool:
+        """Return True only when a line is essentially just a file path reference with no prose context."""
+        stripped = line.strip()
+        # Empty or heading lines are always kept
+        if not stripped or stripped.startswith("#"):
+            return False
+        paths_in_line = re.findall(r'`([a-zA-Z0-9_\-/]+\.(?:py|js|jsx|ts|tsx|md))`', line)
+        if not paths_in_line:
+            return False  # No file references — keep the line
+        # Check every referenced path is disallowed
+        all_disallowed = all(
+            not any(
                 p == path or p.endswith("/" + path) or path.endswith("/" + p)
                 for p in allowed_paths
             )
-            for path in re.findall(r'`([a-zA-Z0-9_\-/]+\.(?:py|js|jsx|ts|tsx|md))`', line)
-        ),
+            for path in paths_in_line
+        )
+        if not all_disallowed:
+            return False  # At least one allowed path — keep the line
+        # Only drop if the line is mostly the path (list item or short standalone reference)
+        # If there is substantial prose surrounding the path, keep it.
+        non_path_text = re.sub(r'`[a-zA-Z0-9_\-/]+\.(?:py|js|jsx|ts|tsx|md)`', '', line).strip()
+        # Strip leading list markers
+        non_path_text = re.sub(r'^[-*\d.]+\s*', '', non_path_text).strip()
+        # If leftover text is short (e.g. "* file:", "see also:"), drop the line
+        return len(non_path_text) < 30
+
+    answer = _filter_lines_outside_code_blocks(
+        answer,
+        drop_line=_is_bare_path_line,
     )
 
     # 5. Code request post-processing
@@ -1676,66 +1708,67 @@ def _run_query_impl(
             return answer, [], token_count
         started = time.perf_counter()
         answer = build_docs_summary_answer(raw_query, docs_sources, expanded)
-        metrics.add_stage("docs_summary_answer", started)
-        cited_entities = extract_cited_entities(docs_sources)
-        response_mode = "docs_summary"
-        memory.add(
-            raw_query, answer,
-            resolved_query=_resolved_query_text(query_info, raw_query),
-            entities=cited_entities,
-            primary_intent=primary_intent,
-        )
-        meta["validation"] = getattr(memory, "last_validation", None)
-        meta.update(
-            {
-                "stage_latency_ms": metrics.stage_latency_ms,
-                "total_latency_ms": metrics.total_ms(),
-                "backend_latency_ms": metrics.total_ms(),
-                "provider_latency_ms": 0,
-                "errors": metrics.errors,
-                "response_mode": "docs_summary",
-                "evidence_confidence": evidence_confidence,
-            }
-        )
-        if evaluation is not None:
-            evaluation["response_mode"] = "docs_summary"
-            evaluation["display_sources"] = list(docs_sources)
-            evaluation["reasoning_sources"] = list(reasoning_sources)
-            evaluation["answer_context"] = ""
-            evaluation["answer_context_blocks"] = []
-        log_event(
-            "retrieval.request.end",
-            rid,
-            status="ok",
-            stage_latency_ms=metrics.stage_latency_ms,
-            total_latency_ms=metrics.total_ms(),
-            candidates=len(candidates),
-            expanded=len(expanded),
-            shown_sources=len(docs_sources),
-            source_filter=meta["source_filter"],
-            response_mode="docs_summary",
-            evidence_confidence=evidence_confidence["level"],
-        )
-        _write_trace_for_query(
-            raw_query=raw_query,
-            answer=answer,
-            response_sources=docs_sources,
-            expanded=expanded,
-            memory=memory,
-            metrics=metrics,
-            primary_intent=primary_intent,
-            query_info=query_info,
-        )
-        if stream_handler:
-            stream_handler.on_status("Generating answer...")
-            for i in range(0, len(answer), 8):
-                if abort_event and abort_event.is_set():
-                    break
-                stream_handler.on_delta(answer[i:i+8])
-                time.sleep(0.01)
-        if return_meta:
-            return answer, docs_sources, token_count, meta
-        return answer, docs_sources, token_count
+        if answer and answer.strip():
+            metrics.add_stage("docs_summary_answer", started)
+            cited_entities = extract_cited_entities(docs_sources)
+            response_mode = "docs_summary"
+            memory.add(
+                raw_query, answer,
+                resolved_query=_resolved_query_text(query_info, raw_query),
+                entities=cited_entities,
+                primary_intent=primary_intent,
+            )
+            meta["validation"] = getattr(memory, "last_validation", None)
+            meta.update(
+                {
+                    "stage_latency_ms": metrics.stage_latency_ms,
+                    "total_latency_ms": metrics.total_ms(),
+                    "backend_latency_ms": metrics.total_ms(),
+                    "provider_latency_ms": 0,
+                    "errors": metrics.errors,
+                    "response_mode": "docs_summary",
+                    "evidence_confidence": evidence_confidence,
+                }
+            )
+            if evaluation is not None:
+                evaluation["response_mode"] = "docs_summary"
+                evaluation["display_sources"] = list(docs_sources)
+                evaluation["reasoning_sources"] = list(reasoning_sources)
+                evaluation["answer_context"] = ""
+                evaluation["answer_context_blocks"] = []
+            log_event(
+                "retrieval.request.end",
+                rid,
+                status="ok",
+                stage_latency_ms=metrics.stage_latency_ms,
+                total_latency_ms=metrics.total_ms(),
+                candidates=len(candidates),
+                expanded=len(expanded),
+                shown_sources=len(docs_sources),
+                source_filter=meta["source_filter"],
+                response_mode="docs_summary",
+                evidence_confidence=evidence_confidence["level"],
+            )
+            _write_trace_for_query(
+                raw_query=raw_query,
+                answer=answer,
+                response_sources=docs_sources,
+                expanded=expanded,
+                memory=memory,
+                metrics=metrics,
+                primary_intent=primary_intent,
+                query_info=query_info,
+            )
+            if stream_handler:
+                stream_handler.on_status("Generating answer...")
+                for i in range(0, len(answer), 8):
+                    if abort_event and abort_event.is_set():
+                        break
+                    stream_handler.on_delta(answer[i:i+8])
+                    time.sleep(0.01)
+            if return_meta:
+                return answer, docs_sources, token_count, meta
+            return answer, docs_sources, token_count
     if not shown_sources:
         answer = LOW_CONTEXT_FALLBACK
         cited_entities = {}
@@ -1967,69 +2000,70 @@ def _run_query_impl(
         evaluation["reasoning_context_token_count"] = int(reasoning_token_count)
     meta["display_sources"] = list(display_sources)
     meta["reasoning_sources"] = list(reasoning_sources)
-    from retrieval.generation.code_answers import is_file_summary_request, build_file_summary_answer
-    if is_file_summary_request(raw_query):
+    from retrieval.generation.code_answers import is_file_summary_request, build_file_summary_answer, is_symbol_behavior_request, is_usage_example_request
+    if is_file_summary_request(raw_query) and not is_symbol_behavior_request(raw_query) and not is_usage_example_request(raw_query):
         started = time.perf_counter()
         answer = build_file_summary_answer(raw_query, shown_sources, expanded)
-        response_mode = "file_summary"
-        metrics.add_stage("file_summary_answer", started)
-        cited_entities = extract_cited_entities(shown_sources)
-        memory.add(
-            raw_query, answer,
-            resolved_query=_resolved_query_text(query_info, raw_query),
-            entities=cited_entities,
-            primary_intent=primary_intent,
-        )
-        meta["validation"] = getattr(memory, "last_validation", None)
-        meta.update(
-            {
-                "stage_latency_ms": metrics.stage_latency_ms,
-                "total_latency_ms": metrics.total_ms(),
-                "backend_latency_ms": metrics.total_ms(),
-                "provider_latency_ms": 0,
-                "errors": metrics.errors,
-                "response_mode": "file_summary",
-                "evidence_confidence": evidence_confidence,
-            }
-        )
-        if evaluation is not None:
-            evaluation["response_mode"] = "file_summary"
-            evaluation["answer_context"] = context
-            evaluation["answer_context_blocks"] = list(context_blocks)
-        log_event(
-            "retrieval.request.end",
-            rid,
-            status="ok",
-            stage_latency_ms=metrics.stage_latency_ms,
-            total_latency_ms=metrics.total_ms(),
-            candidates=len(candidates),
-            expanded=len(expanded),
-            shown_sources=len(shown_sources),
-            source_filter=meta["source_filter"],
-            response_mode="file_summary",
-            evidence_confidence=evidence_confidence["level"],
-        )
-        _write_trace_for_query(
-            raw_query=raw_query,
-            answer=answer,
-            response_sources=shown_sources,
-            expanded=expanded,
-            memory=memory,
-            metrics=metrics,
-            primary_intent=primary_intent,
-            query_info=query_info,
-        )
-        if stream_handler:
-            stream_handler.on_status("Generating answer...")
-            for i in range(0, len(answer), 8):
-                if abort_event and abort_event.is_set():
-                    break
-                stream_handler.on_delta(answer[i:i+8])
-                time.sleep(0.01)
-        if return_meta:
-            return answer, shown_sources, token_count, meta
-        return answer, shown_sources, token_count
-    elif is_code_request(raw_query):
+        if answer and answer.strip():
+            response_mode = "file_summary"
+            metrics.add_stage("file_summary_answer", started)
+            cited_entities = extract_cited_entities(shown_sources)
+            memory.add(
+                raw_query, answer,
+                resolved_query=_resolved_query_text(query_info, raw_query),
+                entities=cited_entities,
+                primary_intent=primary_intent,
+            )
+            meta["validation"] = getattr(memory, "last_validation", None)
+            meta.update(
+                {
+                    "stage_latency_ms": metrics.stage_latency_ms,
+                    "total_latency_ms": metrics.total_ms(),
+                    "backend_latency_ms": metrics.total_ms(),
+                    "provider_latency_ms": 0,
+                    "errors": metrics.errors,
+                    "response_mode": "file_summary",
+                    "evidence_confidence": evidence_confidence,
+                }
+            )
+            if evaluation is not None:
+                evaluation["response_mode"] = "file_summary"
+                evaluation["answer_context"] = context
+                evaluation["answer_context_blocks"] = list(context_blocks)
+            log_event(
+                "retrieval.request.end",
+                rid,
+                status="ok",
+                stage_latency_ms=metrics.stage_latency_ms,
+                total_latency_ms=metrics.total_ms(),
+                candidates=len(candidates),
+                expanded=len(expanded),
+                shown_sources=len(shown_sources),
+                source_filter=meta["source_filter"],
+                response_mode="file_summary",
+                evidence_confidence=evidence_confidence["level"],
+            )
+            _write_trace_for_query(
+                raw_query=raw_query,
+                answer=answer,
+                response_sources=shown_sources,
+                expanded=expanded,
+                memory=memory,
+                metrics=metrics,
+                primary_intent=primary_intent,
+                query_info=query_info,
+            )
+            if stream_handler:
+                stream_handler.on_status("Generating answer...")
+                for i in range(0, len(answer), 8):
+                    if abort_event and abort_event.is_set():
+                        break
+                    stream_handler.on_delta(answer[i:i+8])
+                    time.sleep(0.01)
+            if return_meta:
+                return answer, shown_sources, token_count, meta
+            return answer, shown_sources, token_count
+    elif is_code_request(raw_query) and not is_usage_example_request(raw_query) and not is_symbol_behavior_request(raw_query):
         started = time.perf_counter()
         from retrieval.search.searcher import match_code_topic_route
         matched_code_topic_route = match_code_topic_route(raw_query, primary_intent)
@@ -2060,16 +2094,90 @@ def _run_query_impl(
             )
         else:
             answer = build_code_snippet_answer(raw_query, shown_sources, expanded)
-            response_mode = "code_snippet"
-            if matched_code_topic_route or exact_symbol_support_sources or rendered_code_sources:
-                answer, shown_sources = post_process_answer_and_sources(
-                    answer,
-                    rendered_code_sources or exact_symbol_support_sources or route_support_sources,
-                    raw_query,
+            if answer and answer.strip():
+                response_mode = "code_snippet"
+                if matched_code_topic_route or exact_symbol_support_sources or rendered_code_sources:
+                    answer, shown_sources = post_process_answer_and_sources(
+                        answer,
+                        rendered_code_sources or exact_symbol_support_sources or route_support_sources,
+                        raw_query,
+                        primary_intent=primary_intent,
+                    )
+                metrics.add_stage("code_answer", started)
+                cited_entities = extract_cited_entities(shown_sources)
+                memory.add(
+                    raw_query, answer,
+                    resolved_query=_resolved_query_text(query_info, raw_query),
+                    entities=cited_entities,
                     primary_intent=primary_intent,
                 )
-            metrics.add_stage("code_answer", started)
+                meta["validation"] = getattr(memory, "last_validation", None)
+                meta.update(
+                    {
+                        "stage_latency_ms": metrics.stage_latency_ms,
+                        "total_latency_ms": metrics.total_ms(),
+                        "backend_latency_ms": metrics.total_ms(),
+                        "provider_latency_ms": 0,
+                        "errors": metrics.errors,
+                        "response_mode": "code_snippet",
+                        "evidence_confidence": evidence_confidence,
+                    }
+                )
+                if evaluation is not None:
+                    evaluation["response_mode"] = "code_snippet"
+                    evaluation["answer_context"] = context
+                    evaluation["answer_context_blocks"] = list(context_blocks)
+                log_event(
+                    "retrieval.request.end",
+                    rid,
+                    status="ok",
+                    stage_latency_ms=metrics.stage_latency_ms,
+                    total_latency_ms=metrics.total_ms(),
+                    candidates=len(candidates),
+                    expanded=len(expanded),
+                    shown_sources=len(shown_sources),
+                    source_filter=meta["source_filter"],
+                    response_mode="code_excerpt",
+                    evidence_confidence=evidence_confidence["level"],
+                )
+                _write_trace_for_query(
+                    raw_query=raw_query,
+                    answer=answer,
+                    response_sources=shown_sources,
+                    expanded=expanded,
+                    memory=memory,
+                    metrics=metrics,
+                    primary_intent=primary_intent,
+                    query_info=query_info,
+                )
+                if stream_handler:
+                    stream_handler.on_status("Generating answer...")
+                    for i in range(0, len(answer), 8):
+                        if abort_event and abort_event.is_set():
+                            break
+                        stream_handler.on_delta(answer[i:i+8])
+                        time.sleep(0.01)
+                if return_meta:
+                    return answer, shown_sources, token_count, meta
+                return answer, shown_sources, token_count
+    if is_architecture_request(raw_query):
+        answer, architecture_sources = build_architecture_answer(
+            raw_query,
+            shown_sources,
+            expanded,
+            return_sources=True,
+        )
+        if answer and answer.strip():
+            if architecture_sources:
+                shown_sources = architecture_sources
+            answer, shown_sources = post_process_answer_and_sources(
+                answer,
+                shown_sources,
+                raw_query,
+                primary_intent=primary_intent,
+            )
             cited_entities = extract_cited_entities(shown_sources)
+            response_mode = "architecture_summary"
             memory.add(
                 raw_query, answer,
                 resolved_query=_resolved_query_text(query_info, raw_query),
@@ -2084,12 +2192,11 @@ def _run_query_impl(
                     "backend_latency_ms": metrics.total_ms(),
                     "provider_latency_ms": 0,
                     "errors": metrics.errors,
-                    "response_mode": "code_snippet",
-                    "evidence_confidence": evidence_confidence,
+                    "response_mode": "architecture_summary",
                 }
             )
             if evaluation is not None:
-                evaluation["response_mode"] = "code_snippet"
+                evaluation["response_mode"] = "architecture_summary"
                 evaluation["answer_context"] = context
                 evaluation["answer_context_blocks"] = list(context_blocks)
             log_event(
@@ -2102,8 +2209,7 @@ def _run_query_impl(
                 expanded=len(expanded),
                 shown_sources=len(shown_sources),
                 source_filter=meta["source_filter"],
-                response_mode="code_excerpt",
-                evidence_confidence=evidence_confidence["level"],
+                response_mode="architecture_summary",
             )
             _write_trace_for_query(
                 raw_query=raw_query,
@@ -2125,139 +2231,70 @@ def _run_query_impl(
             if return_meta:
                 return answer, shown_sources, token_count, meta
             return answer, shown_sources, token_count
-    if is_architecture_request(raw_query):
-        answer, architecture_sources = build_architecture_answer(
-            raw_query,
-            shown_sources,
-            expanded,
-            return_sources=True,
-        )
-        if architecture_sources:
-            shown_sources = architecture_sources
-        answer, shown_sources = post_process_answer_and_sources(
-            answer,
-            shown_sources,
-            raw_query,
-            primary_intent=primary_intent,
-        )
-        cited_entities = extract_cited_entities(shown_sources)
-        response_mode = "architecture_summary"
-        memory.add(
-            raw_query, answer,
-            resolved_query=_resolved_query_text(query_info, raw_query),
-            entities=cited_entities,
-            primary_intent=primary_intent,
-        )
-        meta["validation"] = getattr(memory, "last_validation", None)
-        meta.update(
-            {
-                "stage_latency_ms": metrics.stage_latency_ms,
-                "total_latency_ms": metrics.total_ms(),
-                "backend_latency_ms": metrics.total_ms(),
-                "provider_latency_ms": 0,
-                "errors": metrics.errors,
-                "response_mode": "architecture_summary",
-            }
-        )
-        if evaluation is not None:
-            evaluation["response_mode"] = "architecture_summary"
-            evaluation["answer_context"] = context
-            evaluation["answer_context_blocks"] = list(context_blocks)
-        log_event(
-            "retrieval.request.end",
-            rid,
-            status="ok",
-            stage_latency_ms=metrics.stage_latency_ms,
-            total_latency_ms=metrics.total_ms(),
-            candidates=len(candidates),
-            expanded=len(expanded),
-            shown_sources=len(shown_sources),
-            source_filter=meta["source_filter"],
-            response_mode="architecture_summary",
-        )
-        _write_trace_for_query(
-            raw_query=raw_query,
-            answer=answer,
-            response_sources=shown_sources,
-            expanded=expanded,
-            memory=memory,
-            metrics=metrics,
-            primary_intent=primary_intent,
-            query_info=query_info,
-        )
-        if stream_handler:
-            stream_handler.on_status("Generating answer...")
-            for i in range(0, len(answer), 8):
-                if abort_event and abort_event.is_set():
-                    break
-                stream_handler.on_delta(answer[i:i+8])
-                time.sleep(0.01)
-        if return_meta:
-            return answer, shown_sources, token_count, meta
-        return answer, shown_sources, token_count
     if is_overview_request(raw_query):
         answer = build_overview_answer(raw_query, shown_sources, expanded)
-        answer, shown_sources = post_process_answer_and_sources(
-            answer,
-            shown_sources,
-            raw_query,
-            primary_intent=primary_intent,
-        )
-        cited_entities = extract_cited_entities(shown_sources)
-        response_mode = "overview_summary"
-        memory.add(
-            raw_query, answer,
-            resolved_query=_resolved_query_text(query_info, raw_query),
-            entities=cited_entities,
-            primary_intent=primary_intent,
-        )
-        meta["validation"] = getattr(memory, "last_validation", None)
-        meta.update(
-            {
-                "stage_latency_ms": metrics.stage_latency_ms,
-                "total_latency_ms": metrics.total_ms(),
-                "backend_latency_ms": metrics.total_ms(),
-                "provider_latency_ms": 0,
-                "errors": metrics.errors,
-                "response_mode": "overview_summary",
-            }
-        )
-        if evaluation is not None:
-            evaluation["response_mode"] = "overview_summary"
-            evaluation["answer_context"] = context
-            evaluation["answer_context_blocks"] = list(context_blocks)
-        log_event(
-            "retrieval.request.end",
-            rid,
-            status="ok",
-            stage_latency_ms=metrics.stage_latency_ms,
-            total_latency_ms=metrics.total_ms(),
-            candidates=len(candidates),
-            expanded=len(expanded),
-            shown_sources=len(shown_sources),
-            source_filter=meta["source_filter"],
-            response_mode="overview_summary",
-        )
-        _write_trace_for_query(
-            raw_query=raw_query,
-            answer=answer,
-            response_sources=shown_sources,
-            expanded=expanded,
-            memory=memory,
-            metrics=metrics,
-            primary_intent=primary_intent,
-            query_info=query_info,
-        )
-        if stream_handler:
-            stream_handler.on_status("Generating answer...")
-            for i in range(0, len(answer), 8):
-                if abort_event and abort_event.is_set():
-                    break
-                stream_handler.on_delta(answer[i:i+8])
-                time.sleep(0.01)
-        if return_meta:
-            return answer, shown_sources, token_count, meta
-        return answer, shown_sources, token_count
+        if answer and answer.strip():
+            answer, shown_sources = post_process_answer_and_sources(
+                answer,
+                shown_sources,
+                raw_query,
+                primary_intent=primary_intent,
+            )
+            cited_entities = extract_cited_entities(shown_sources)
+            response_mode = "overview_summary"
+            memory.add(
+                raw_query, answer,
+                resolved_query=_resolved_query_text(query_info, raw_query),
+                entities=cited_entities,
+                primary_intent=primary_intent,
+            )
+            meta["validation"] = getattr(memory, "last_validation", None)
+            meta.update(
+                {
+                    "stage_latency_ms": metrics.stage_latency_ms,
+                    "total_latency_ms": metrics.total_ms(),
+                    "backend_latency_ms": metrics.total_ms(),
+                    "provider_latency_ms": 0,
+                    "errors": metrics.errors,
+                    "response_mode": "overview_summary",
+                }
+            )
+            if evaluation is not None:
+                evaluation["response_mode"] = "overview_summary"
+                evaluation["answer_context"] = context
+                evaluation["answer_context_blocks"] = list(context_blocks)
+            log_event(
+                "retrieval.request.end",
+                rid,
+                status="ok",
+                stage_latency_ms=metrics.stage_latency_ms,
+                total_latency_ms=metrics.total_ms(),
+                candidates=len(candidates),
+                expanded=len(expanded),
+                shown_sources=len(shown_sources),
+                source_filter=meta["source_filter"],
+                response_mode="overview_summary",
+            )
+            _write_trace_for_query(
+                raw_query=raw_query,
+                answer=answer,
+                response_sources=shown_sources,
+                expanded=expanded,
+                memory=memory,
+                metrics=metrics,
+                primary_intent=primary_intent,
+                query_info=query_info,
+            )
+            if stream_handler:
+                stream_handler.on_status("Generating answer...")
+                for i in range(0, len(answer), 8):
+                    if abort_event and abort_event.is_set():
+                        break
+                    stream_handler.on_delta(answer[i:i+8])
+                    time.sleep(0.01)
+            if return_meta:
+                return answer, shown_sources, token_count, meta
+            return answer, shown_sources, token_count
     if is_flow_explanation_request(raw_query):
         answer, flow_sources = build_flow_answer(
             raw_query,
@@ -2265,69 +2302,70 @@ def _run_query_impl(
             expanded,
             return_sources=True,
         )
-        if flow_sources:
-            shown_sources = flow_sources
-        answer, shown_sources = post_process_answer_and_sources(
-            answer,
-            shown_sources,
-            raw_query,
-            primary_intent=primary_intent,
-        )
-        cited_entities = extract_cited_entities(shown_sources)
-        response_mode = "flow_summary"
-        memory.add(
-            raw_query, answer,
-            resolved_query=_resolved_query_text(query_info, raw_query),
-            entities=cited_entities,
-            primary_intent=primary_intent,
-        )
-        meta["validation"] = getattr(memory, "last_validation", None)
-        meta.update(
-            {
-                "stage_latency_ms": metrics.stage_latency_ms,
-                "total_latency_ms": metrics.total_ms(),
-                "backend_latency_ms": metrics.total_ms(),
-                "provider_latency_ms": 0,
-                "errors": metrics.errors,
-                "response_mode": "flow_summary",
-            }
-        )
-        if evaluation is not None:
-            evaluation["response_mode"] = "flow_summary"
-            evaluation["answer_context"] = context
-            evaluation["answer_context_blocks"] = list(context_blocks)
-        log_event(
-            "retrieval.request.end",
-            rid,
-            status="ok",
-            stage_latency_ms=metrics.stage_latency_ms,
-            total_latency_ms=metrics.total_ms(),
-            candidates=len(candidates),
-            expanded=len(expanded),
-            shown_sources=len(shown_sources),
-            source_filter=meta["source_filter"],
-            response_mode="flow_summary",
-        )
-        _write_trace_for_query(
-            raw_query=raw_query,
-            answer=answer,
-            response_sources=shown_sources,
-            expanded=expanded,
-            memory=memory,
-            metrics=metrics,
-            primary_intent=primary_intent,
-            query_info=query_info,
-        )
-        if stream_handler:
-            stream_handler.on_status("Generating answer...")
-            for i in range(0, len(answer), 8):
-                if abort_event and abort_event.is_set():
-                    break
-                stream_handler.on_delta(answer[i:i+8])
-                time.sleep(0.01)
-        if return_meta:
-            return answer, shown_sources, token_count, meta
-        return answer, shown_sources, token_count
+        if answer and answer.strip():
+            if flow_sources:
+                shown_sources = flow_sources
+            answer, shown_sources = post_process_answer_and_sources(
+                answer,
+                shown_sources,
+                raw_query,
+                primary_intent=primary_intent,
+            )
+            cited_entities = extract_cited_entities(shown_sources)
+            response_mode = "flow_summary"
+            memory.add(
+                raw_query, answer,
+                resolved_query=_resolved_query_text(query_info, raw_query),
+                entities=cited_entities,
+                primary_intent=primary_intent,
+            )
+            meta["validation"] = getattr(memory, "last_validation", None)
+            meta.update(
+                {
+                    "stage_latency_ms": metrics.stage_latency_ms,
+                    "total_latency_ms": metrics.total_ms(),
+                    "backend_latency_ms": metrics.total_ms(),
+                    "provider_latency_ms": 0,
+                    "errors": metrics.errors,
+                    "response_mode": "flow_summary",
+                }
+            )
+            if evaluation is not None:
+                evaluation["response_mode"] = "flow_summary"
+                evaluation["answer_context"] = context
+                evaluation["answer_context_blocks"] = list(context_blocks)
+            log_event(
+                "retrieval.request.end",
+                rid,
+                status="ok",
+                stage_latency_ms=metrics.stage_latency_ms,
+                total_latency_ms=metrics.total_ms(),
+                candidates=len(candidates),
+                expanded=len(expanded),
+                shown_sources=len(shown_sources),
+                source_filter=meta["source_filter"],
+                response_mode="flow_summary",
+            )
+            _write_trace_for_query(
+                raw_query=raw_query,
+                answer=answer,
+                response_sources=shown_sources,
+                expanded=expanded,
+                memory=memory,
+                metrics=metrics,
+                primary_intent=primary_intent,
+                query_info=query_info,
+            )
+            if stream_handler:
+                stream_handler.on_status("Generating answer...")
+                for i in range(0, len(answer), 8):
+                    if abort_event and abort_event.is_set():
+                        break
+                    stream_handler.on_delta(answer[i:i+8])
+                    time.sleep(0.01)
+            if return_meta:
+                return answer, shown_sources, token_count, meta
+            return answer, shown_sources, token_count
 
     # Phase 2.5: source-location queries with strong evidence
     if is_source_location_query(raw_query):
@@ -2353,133 +2391,153 @@ def _run_query_impl(
                 started = time.perf_counter()
                 answer = build_source_location_answer(raw_query, route_sources, query_info)
                 metrics.add_stage("source_location_answer", started)
-                cited_entities = extract_cited_entities(route_sources)
-                response_mode = "source_location"
-                memory.add(
-                    raw_query, answer,
-                    resolved_query=_resolved_query_text(query_info, raw_query),
-                    entities=cited_entities,
-                    primary_intent=primary_intent,
-                )
-                meta["validation"] = getattr(memory, "last_validation", None)
-                meta.update(
-                    {
-                        "stage_latency_ms": metrics.stage_latency_ms,
-                        "total_latency_ms": metrics.total_ms(),
-                        "backend_latency_ms": metrics.total_ms(),
-                        "provider_latency_ms": 0,
-                        "errors": metrics.errors,
-                        "response_mode": "source_location",
-                        "evidence_confidence": evidence_confidence,
-                    }
-                )
-                if evaluation is not None:
-                    evaluation["response_mode"] = "source_location"
-                    evaluation["answer_context"] = context
-                    evaluation["answer_context_blocks"] = list(context_blocks)
-                log_event(
-                    "retrieval.request.end",
-                    rid,
-                    status="ok",
-                    stage_latency_ms=metrics.stage_latency_ms,
-                    total_latency_ms=metrics.total_ms(),
-                    candidates=len(candidates),
-                    expanded=len(expanded),
-                    shown_sources=len(route_sources),
-                    source_filter=meta["source_filter"],
-                    response_mode="source_location",
-                    evidence_confidence=evidence_confidence["level"],
-                )
-                _write_trace_for_query(
-                    raw_query=raw_query,
-                    answer=answer,
-                    response_sources=route_sources,
-                    expanded=expanded,
-                    memory=memory,
-                    metrics=metrics,
-                    primary_intent=primary_intent,
-                    query_info=query_info,
-                )
-                if stream_handler:
-                    stream_handler.on_status("Generating answer...")
-                    for i in range(0, len(answer), 8):
-                        if abort_event and abort_event.is_set():
-                            break
-                        stream_handler.on_delta(answer[i:i+8])
-                        time.sleep(0.01)
-                if return_meta:
-                    return answer, route_sources, token_count, meta
-                return answer, route_sources, token_count
-    if evidence_confidence["level"] != "weak" and has_strong_source_location_evidence(raw_query, shown_sources, query_info):
+                if not answer or not answer.strip():
+                    route_sources = []
+                else:
+                    cited_entities = extract_cited_entities(route_sources)
+                    response_mode = "source_location"
+                    memory.add(
+                        raw_query, answer,
+                        resolved_query=_resolved_query_text(query_info, raw_query),
+                        entities=cited_entities,
+                        primary_intent=primary_intent,
+                    )
+                    meta["validation"] = getattr(memory, "last_validation", None)
+                    meta.update(
+                        {
+                            "stage_latency_ms": metrics.stage_latency_ms,
+                            "total_latency_ms": metrics.total_ms(),
+                            "backend_latency_ms": metrics.total_ms(),
+                            "provider_latency_ms": 0,
+                            "errors": metrics.errors,
+                            "response_mode": "source_location",
+                            "evidence_confidence": evidence_confidence,
+                        }
+                    )
+                    if evaluation is not None:
+                        evaluation["response_mode"] = "source_location"
+                        evaluation["answer_context"] = context
+                        evaluation["answer_context_blocks"] = list(context_blocks)
+                    log_event(
+                        "retrieval.request.end",
+                        rid,
+                        status="ok",
+                        stage_latency_ms=metrics.stage_latency_ms,
+                        total_latency_ms=metrics.total_ms(),
+                        candidates=len(candidates),
+                        expanded=len(expanded),
+                        shown_sources=len(route_sources),
+                        source_filter=meta["source_filter"],
+                        response_mode="source_location",
+                        evidence_confidence=evidence_confidence["level"],
+                    )
+                    _write_trace_for_query(
+                        raw_query=raw_query,
+                        answer=answer,
+                        response_sources=route_sources,
+                        expanded=expanded,
+                        memory=memory,
+                        metrics=metrics,
+                        primary_intent=primary_intent,
+                        query_info=query_info,
+                    )
+                    if stream_handler:
+                        stream_handler.on_status("Generating answer...")
+                        for i in range(0, len(answer), 8):
+                            if abort_event and abort_event.is_set():
+                                break
+                            stream_handler.on_delta(answer[i:i+8])
+                            time.sleep(0.01)
+                    if return_meta:
+                        return answer, route_sources, token_count, meta
+                    return answer, route_sources, token_count
+    from retrieval.generation.code_answers import is_usage_example_request, is_symbol_behavior_request
+    if (
+        evidence_confidence["level"] != "weak"
+        and has_strong_source_location_evidence(raw_query, shown_sources, query_info)
+        and not is_usage_example_request(raw_query)
+        and not is_symbol_behavior_request(raw_query)
+    ):
         started = time.perf_counter()
         answer = build_source_location_answer(raw_query, shown_sources, query_info)
         metrics.add_stage("source_location_answer", started)
-        cited_entities = extract_cited_entities(shown_sources)
-        response_mode = "source_location"
-        memory.add(
-            raw_query, answer,
-            resolved_query=_resolved_query_text(query_info, raw_query),
-            entities=cited_entities,
-            primary_intent=primary_intent,
-        )
-        meta["validation"] = getattr(memory, "last_validation", None)
-        meta.update(
-            {
-                "stage_latency_ms": metrics.stage_latency_ms,
-                "total_latency_ms": metrics.total_ms(),
-                "backend_latency_ms": metrics.total_ms(),
-                "provider_latency_ms": 0,
-                "errors": metrics.errors,
-                "response_mode": "source_location",
-                "evidence_confidence": evidence_confidence,
-            }
-        )
-        if evaluation is not None:
-            evaluation["response_mode"] = "source_location"
-            evaluation["answer_context"] = context
-            evaluation["answer_context_blocks"] = list(context_blocks)
-        log_event(
-            "retrieval.request.end",
-            rid,
-            status="ok",
-            stage_latency_ms=metrics.stage_latency_ms,
-            total_latency_ms=metrics.total_ms(),
-            candidates=len(candidates),
-            expanded=len(expanded),
-            shown_sources=len(shown_sources),
-            source_filter=meta["source_filter"],
-            response_mode="source_location",
-            evidence_confidence=evidence_confidence["level"],
-        )
-        _write_trace_for_query(
-            raw_query=raw_query,
-            answer=answer,
-            response_sources=shown_sources,
-            expanded=expanded,
-            memory=memory,
-            metrics=metrics,
-            primary_intent=primary_intent,
-            query_info=query_info,
-        )
-        if stream_handler:
-            stream_handler.on_status("Generating answer...")
-            for i in range(0, len(answer), 8):
-                if abort_event and abort_event.is_set():
-                    break
-                stream_handler.on_delta(answer[i:i+8])
-                time.sleep(0.01)
-        if return_meta:
-            return answer, shown_sources, token_count, meta
-        return answer, shown_sources, token_count
+        if not answer or not answer.strip():
+            pass
+        else:
+            cited_entities = extract_cited_entities(shown_sources)
+            response_mode = "source_location"
+            memory.add(
+                raw_query, answer,
+                resolved_query=_resolved_query_text(query_info, raw_query),
+                entities=cited_entities,
+                primary_intent=primary_intent,
+            )
+            meta["validation"] = getattr(memory, "last_validation", None)
+            meta.update(
+                {
+                    "stage_latency_ms": metrics.stage_latency_ms,
+                    "total_latency_ms": metrics.total_ms(),
+                    "backend_latency_ms": metrics.total_ms(),
+                    "provider_latency_ms": 0,
+                    "errors": metrics.errors,
+                    "response_mode": "source_location",
+                    "evidence_confidence": evidence_confidence,
+                }
+            )
+            if evaluation is not None:
+                evaluation["response_mode"] = "source_location"
+                evaluation["answer_context"] = context
+                evaluation["answer_context_blocks"] = list(context_blocks)
+            log_event(
+                "retrieval.request.end",
+                rid,
+                status="ok",
+                stage_latency_ms=metrics.stage_latency_ms,
+                total_latency_ms=metrics.total_ms(),
+                candidates=len(candidates),
+                expanded=len(expanded),
+                shown_sources=len(shown_sources),
+                source_filter=meta["source_filter"],
+                response_mode="source_location",
+                evidence_confidence=evidence_confidence["level"],
+            )
+            _write_trace_for_query(
+                raw_query=raw_query,
+                answer=answer,
+                response_sources=shown_sources,
+                expanded=expanded,
+                memory=memory,
+                metrics=metrics,
+                primary_intent=primary_intent,
+                query_info=query_info,
+            )
+            if stream_handler:
+                stream_handler.on_status("Generating answer...")
+                for i in range(0, len(answer), 8):
+                    if abort_event and abort_event.is_set():
+                        break
+                    stream_handler.on_delta(answer[i:i+8])
+                    time.sleep(0.01)
+            if return_meta:
+                return answer, shown_sources, token_count, meta
+            return answer, shown_sources, token_count
 
     # Phase 3: single-symbol deep-dive — runs before generic explanation
-    if is_symbol_deep_dive_request(raw_query) and evidence_confidence["level"] != "weak":
+    has_symbol_behavior_verbs = bool(
+        set(re.findall(r"[a-z]+", raw_query.lower()))
+        & {
+            "catch", "catches", "caught", "how", "why", "explain", "explains",
+            "trace", "flow", "handle", "handles", "handled", "handling",
+            "error", "errors", "exception", "exceptions", "fail", "fails", "failed", "failure"
+        }
+    )
+    if is_symbol_deep_dive_request(raw_query) and not has_symbol_behavior_verbs and evidence_confidence["level"] != "weak":
         started = time.perf_counter()
         deep_dive_answer = build_symbol_deep_dive_answer(
             raw_query, shown_sources, expanded
         )
         metrics.add_stage("symbol_deep_dive", started)
-        if deep_dive_answer:
+        if deep_dive_answer and deep_dive_answer.strip():
             cited_entities = extract_cited_entities(shown_sources)
             response_mode = "symbol_deep_dive"
             memory.add(
@@ -2541,76 +2599,6 @@ def _run_query_impl(
     if is_explanation_request(raw_query):
         shown_sources = rank_follow_up_sources_for_explanation(shown_sources, raw_query)
         reasoning_sources = rank_follow_up_sources_for_explanation(reasoning_sources, raw_query)
-        # Weak evidence: let LLM handle instead of a thin deterministic explanation
-        if evidence_confidence["level"] != "weak":
-            answer = build_explanation_answer(raw_query, shown_sources, expanded)
-            answer, shown_sources = post_process_answer_and_sources(
-                answer,
-                shown_sources,
-                raw_query,
-                primary_intent=primary_intent,
-            )
-            cited_entities = extract_cited_entities(shown_sources)
-            response_mode = "explanation_summary"
-            memory.add(
-                raw_query, answer,
-                resolved_query=_resolved_query_text(query_info, raw_query),
-                entities=cited_entities,
-                primary_intent=primary_intent,
-            )
-            meta["validation"] = getattr(memory, "last_validation", None)
-            meta.update(
-                {
-                    "stage_latency_ms": metrics.stage_latency_ms,
-                    "total_latency_ms": metrics.total_ms(),
-                    "backend_latency_ms": metrics.total_ms(),
-                    "provider_latency_ms": 0,
-                    "errors": metrics.errors,
-                    "response_mode": "explanation_summary",
-                    "evidence_confidence": evidence_confidence,
-                }
-            )
-            if evaluation is not None:
-                evaluation["response_mode"] = "explanation_summary"
-                evaluation["answer_context"] = context
-                evaluation["answer_context_blocks"] = list(context_blocks)
-            log_event(
-                "retrieval.request.end",
-                rid,
-                status="ok",
-                stage_latency_ms=metrics.stage_latency_ms,
-                total_latency_ms=metrics.total_ms(),
-                candidates=len(candidates),
-                expanded=len(expanded),
-                shown_sources=len(shown_sources),
-                source_filter=meta["source_filter"],
-                response_mode="explanation_summary",
-                evidence_confidence=evidence_confidence["level"],
-            )
-            _write_trace_for_query(
-                raw_query=raw_query,
-                answer=answer,
-                response_sources=shown_sources,
-                expanded=expanded,
-                memory=memory,
-                metrics=metrics,
-                primary_intent=primary_intent,
-                query_info=query_info,
-            )
-            if stream_handler:
-                stream_handler.on_status("Generating answer...")
-                for i in range(0, len(answer), 8):
-                    if abort_event and abort_event.is_set():
-                        break
-                    stream_handler.on_delta(answer[i:i+8])
-                    time.sleep(0.01)
-            if return_meta:
-                return answer, shown_sources, token_count, meta
-            return answer, shown_sources, token_count
-        log_event(
-            "retrieval.explanation.skipped", rid,
-            reason="weak_evidence", count=evidence_confidence["count"]
-        )
     if should_return_low_confidence_response(evidence_confidence, candidates, query_info):
         answer = build_low_confidence_response(raw_query, candidates, shown_sources)
         response_sources = list(shown_sources[:3]) if shown_sources else list(candidates[:3])

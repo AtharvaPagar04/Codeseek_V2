@@ -924,6 +924,7 @@ def _query_impl(
         raise HTTPException(status_code=400, detail="Missing query text (use query or question)")
     previous_repo = os.getenv("RETRIEVAL_REPO_ROOT", "")
     previous_collection = os.getenv("QDRANT_COLLECTION_NAME", "")
+    previous_tenant = os.getenv("RETRIEVAL_TENANT_ID", "")
     try:
         provider_config = get_active_provider_credential(auth_user["id"])
     except ValueError as e:
@@ -956,12 +957,14 @@ def _query_impl(
     if session:
         os.environ["RETRIEVAL_REPO_ROOT"] = session["repo_root"]
         os.environ["QDRANT_COLLECTION_NAME"] = session["collection"]
+        os.environ["RETRIEVAL_TENANT_ID"] = str(session.get("tenant_id", "") or "")
         log_event(
             "api.query.session_bound",
             request_id,
             session_id=session.get("id"),
             repo_root=session.get("repo_root"),
             collection=session.get("collection"),
+            tenant_id=session.get("tenant_id"),
         )
     try:
         validate_collection_binding(get_collection_name(), get_repo_root())
@@ -1115,6 +1118,10 @@ def _query_impl(
                 os.environ["QDRANT_COLLECTION_NAME"] = previous_collection
             else:
                 os.environ.pop("QDRANT_COLLECTION_NAME", None)
+            if previous_tenant:
+                os.environ["RETRIEVAL_TENANT_ID"] = previous_tenant
+            else:
+                os.environ.pop("RETRIEVAL_TENANT_ID", None)
 
 
 @v1.get("/health")
@@ -1200,6 +1207,7 @@ async def query_stream_v1(
         raise HTTPException(status_code=400, detail="Missing query text (use query or question)")
     previous_repo = os.getenv("RETRIEVAL_REPO_ROOT", "")
     previous_collection = os.getenv("QDRANT_COLLECTION_NAME", "")
+    previous_tenant = os.getenv("RETRIEVAL_TENANT_ID", "")
     try:
         provider_config = get_active_provider_credential(auth_user["id"])
     except ValueError as e:
@@ -1232,12 +1240,14 @@ async def query_stream_v1(
     if session:
         os.environ["RETRIEVAL_REPO_ROOT"] = session["repo_root"]
         os.environ["QDRANT_COLLECTION_NAME"] = session["collection"]
+        os.environ["RETRIEVAL_TENANT_ID"] = str(session.get("tenant_id", "") or "")
         log_event(
             "api.query_stream.session_bound",
             request_id,
             session_id=session.get("id"),
             repo_root=session.get("repo_root"),
             collection=session.get("collection"),
+            tenant_id=session.get("tenant_id"),
         )
     try:
         validate_collection_binding(get_collection_name(), get_repo_root())
@@ -1367,8 +1377,18 @@ async def query_stream_v1(
             # Clean up and restore env
             abort_event.set()
             if session:
-                os.environ["RETRIEVAL_REPO_ROOT"] = previous_repo
-                os.environ["QDRANT_COLLECTION_NAME"] = previous_collection
+                if previous_repo:
+                    os.environ["RETRIEVAL_REPO_ROOT"] = previous_repo
+                else:
+                    os.environ.pop("RETRIEVAL_REPO_ROOT", None)
+                if previous_collection:
+                    os.environ["QDRANT_COLLECTION_NAME"] = previous_collection
+                else:
+                    os.environ.pop("QDRANT_COLLECTION_NAME", None)
+                if previous_tenant:
+                    os.environ["RETRIEVAL_TENANT_ID"] = previous_tenant
+                else:
+                    os.environ.pop("RETRIEVAL_TENANT_ID", None)
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
@@ -2307,7 +2327,7 @@ def _oauth_popup_html(*, success: bool, error: str = "") -> str:
 
 
 @app.get("/auth/github/login", response_model=None)
-def auth_github_login() -> HTMLResponse | RedirectResponse:
+def auth_github_login(request: Request, flow: str | None = None) -> HTMLResponse | RedirectResponse:
     """Start GitHub OAuth: generate CSRF state cookie and redirect browser to GitHub."""
     try:
         client_id, _, redirect_uri = _github_oauth_config()
@@ -2317,7 +2337,8 @@ def auth_github_login() -> HTMLResponse | RedirectResponse:
     if not redirect_uri:
         redirect_uri = f"{CODESEEK_FRONTEND_URL.rstrip('/')}/auth/github/callback"
 
-    state = secrets.token_urlsafe(32)
+    flow_prefix = "redirect:" if flow == "redirect" else "popup:"
+    state = f"{flow_prefix}{secrets.token_urlsafe(32)}"
     params = urllib.parse.urlencode({
         "client_id": client_id,
         "redirect_uri": redirect_uri,
@@ -2347,17 +2368,39 @@ def auth_github_callback(
     state: str | None = None,
     error: str | None = None,
     error_description: str | None = None,
-) -> HTMLResponse:
+) -> HTMLResponse | RedirectResponse:
     """GitHub OAuth callback: verify CSRF state, exchange code, set session cookie, close popup."""
+    is_redirect = False
+    if state and state.startswith("redirect:"):
+        is_redirect = True
+
+    def _auth_response(success: bool, error_msg: str | None = None, session_token: str | None = None) -> HTMLResponse | RedirectResponse:
+        if is_redirect:
+            dest = CODESEEK_FRONTEND_URL
+            if error_msg:
+                dest = f"{dest.rstrip('/')}/?oauth_error={urllib.parse.quote(error_msg)}"
+            resp = RedirectResponse(url=dest, status_code=302)
+            if success and session_token:
+                resp.set_cookie(AUTH_SESSION_COOKIE, session_token, **_cookie_settings())
+            resp.delete_cookie(OAUTH_STATE_COOKIE, path="/")
+            return resp
+        else:
+            html_content = _oauth_popup_html(success=success, error=error_msg or "")
+            resp = HTMLResponse(content=html_content)
+            if success and session_token:
+                resp.set_cookie(AUTH_SESSION_COOKIE, session_token, **_cookie_settings())
+            resp.delete_cookie(OAUTH_STATE_COOKIE, path="/")
+            return resp
+
     # User cancelled or GitHub error
     if error:
         msg = error_description or error
-        return HTMLResponse(content=_oauth_popup_html(success=False, error=msg))
+        return _auth_response(success=False, error_msg=msg)
 
     # CSRF state check
     cookie_state = request.cookies.get(OAUTH_STATE_COOKIE, "")
     if not code or not state or not cookie_state or not hmac.compare_digest(cookie_state, state):
-        return HTMLResponse(content=_oauth_popup_html(success=False, error="Invalid or expired OAuth state. Please try again."))
+        return _auth_response(success=False, error_msg="Invalid or expired OAuth state. Please try again.")
 
     request_id = new_request_id()
     try:
@@ -2365,16 +2408,16 @@ def auth_github_callback(
         access_token = str(token_data.get("access_token", "")).strip()
     except HTTPException as exc:
         _log_http_error("api.auth.github.error", request_id, exc.status_code, exc.detail)
-        return HTMLResponse(content=_oauth_popup_html(success=False, error=str(exc.detail)))
+        return _auth_response(success=False, error_msg=str(exc.detail))
     except Exception as exc:
         _log_http_error("api.auth.github.error", request_id, 502, str(exc))
-        return HTMLResponse(content=_oauth_popup_html(success=False, error="GitHub OAuth failed. Please try again."))
+        return _auth_response(success=False, error_msg="GitHub OAuth failed. Please try again.")
 
     try:
         persisted = _persist_github_login(access_token)
     except Exception as exc:
         _log_http_error("api.auth.github.error", request_id, 502, str(exc))
-        return HTMLResponse(content=_oauth_popup_html(success=False, error="GitHub profile fetch failed."))
+        return _auth_response(success=False, error_msg="GitHub profile fetch failed.")
 
     session_token, _session = create_auth_session(persisted["user"]["id"])
     log_event(
@@ -2383,10 +2426,7 @@ def auth_github_callback(
         user_id=persisted["user"]["id"],
         username=persisted["username"],
     )
-    html_response = HTMLResponse(content=_oauth_popup_html(success=True))
-    html_response.set_cookie(AUTH_SESSION_COOKIE, session_token, **_cookie_settings())
-    html_response.delete_cookie(OAUTH_STATE_COOKIE, path="/")
-    return html_response
+    return _auth_response(success=True, session_token=session_token)
 
 
 @app.post("/auth/github")

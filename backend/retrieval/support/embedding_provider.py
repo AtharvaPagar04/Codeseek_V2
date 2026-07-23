@@ -627,12 +627,16 @@ def current_embedding_metadata(
     return metadata
 
 
-def unload_local_embedding_model() -> None:
+def unload_local_embedding_model() -> bool:
     with _LOCAL_MODEL_LOCK:
+        had_models = len(_LOCAL_MODELS) > 0
         _LOCAL_MODELS.clear()
+        return had_models
 
 
 def _get_local_model(model_name: str, device: str):
+    if ":" in model_name or "nomic-embed-text" in model_name:
+        model_name = "sentence-transformers/all-MiniLM-L6-v2"
     key = (model_name, device)
     with _LOCAL_MODEL_LOCK:
         model = _LOCAL_MODELS.get(key)

@@ -63,15 +63,24 @@ export function useGitHub() {
     // Popup blocked — fall back to full-page redirect
     if (!popup || popup.closed) {
       setOauthLoading(false);
-      window.location.href = loginUrl;
+      window.location.href = `${loginUrl}?flow=redirect`;
       return;
     }
 
     const handleMessage = (event) => {
+      let apiHostname = window.location.hostname;
+      try {
+        if (API_BASE.startsWith('http://') || API_BASE.startsWith('https://')) {
+          apiHostname = new URL(API_BASE).hostname;
+        }
+      } catch (e) {
+        console.error('[useGitHub] Failed to parse API_BASE hostname:', e);
+      }
+
       // Only accept from our backend origin (where the popup page is served)
       if (
         event.data?.type !== 'CODESEEK_GITHUB_AUTH' ||
-        !event.origin.includes(new URL(API_BASE).hostname)
+        !event.origin.includes(apiHostname)
       ) return;
 
       cleanup();
@@ -85,10 +94,15 @@ export function useGitHub() {
     };
 
     const pollTimer = setInterval(() => {
-      if (popup.closed) {
-        cleanup();
-        // Popup closed without postMessage (user closed it) — try refresh anyway
-        loadAuthState().finally(() => setOauthLoading(false));
+      try {
+        if (!popup || popup.closed) {
+          cleanup();
+          // Popup closed without postMessage (user closed it) — try refresh anyway
+          loadAuthState().finally(() => setOauthLoading(false));
+        }
+      } catch (e) {
+        // Prevent cross-origin exceptions from breaking the interval
+        console.debug('[useGitHub] Exception checking popup status:', e);
       }
     }, 500);
 
@@ -99,6 +113,11 @@ export function useGitHub() {
 
     window.addEventListener('message', handleMessage);
   }, [loadAuthState]);
+
+  const resetOauth = useCallback(() => {
+    setOauthLoading(false);
+    setOauthError(null);
+  }, []);
 
   const storeAuth = useCallback(async (accessToken) => {
     const data = await connectGithubToken(accessToken);
@@ -145,6 +164,7 @@ export function useGitHub() {
     oauthError,
     authStateMessage,
     initiateOAuth,
+    resetOauth,
     storeAuth,
     fetchRepos,
     disconnect,

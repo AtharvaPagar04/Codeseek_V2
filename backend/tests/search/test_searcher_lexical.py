@@ -76,6 +76,11 @@ class SearcherLexicalTests(unittest.TestCase):
 
         self.assertEqual(results[0][0]["chunk_id"], "env")
 
+    def test_lexical_tokens_filter_question_stopwords(self) -> None:
+        tokens = searcher._lexical_tokens("How are batch errors caught in the system")
+
+        self.assertEqual(tokens, ["batch", "errors", "caught", "system"])
+
     def test_lexical_index_is_cached_per_collection_and_invalidated(self) -> None:
         client = _FakeClient(
             [
@@ -117,7 +122,7 @@ class SearcherLexicalTests(unittest.TestCase):
 
     def test_dense_search_can_be_disabled_for_offline_evals(self) -> None:
         with patch("retrieval.search.searcher.ENABLE_DENSE_RETRIEVAL", False), patch(
-            "retrieval.search.searcher._get_model", side_effect=AssertionError("model should not load")
+            "retrieval.search.searcher.get_embedding_provider", side_effect=AssertionError("model should not load")
         ):
             self.assertEqual(searcher._dense_search("anything"), [])
 
@@ -179,8 +184,8 @@ class SearcherLexicalTests(unittest.TestCase):
 
         self.assertEqual(len(results), 1)
         payload, _score, source = results[0]
-        self.assertEqual(source, "filter")
-        self.assertEqual(payload["relative_path"], "retrieval/stores/provider_store.py")
+        self.assertEqual(source, "symbol_lookup")
+        self.assertEqual(payload["relative_path"], "retrieval/provider_store.py")
         self.assertEqual(payload["symbol_name"], "create_provider_credential")
         self.assertNotIn("other_symbol", payload["content_excerpt"])
 

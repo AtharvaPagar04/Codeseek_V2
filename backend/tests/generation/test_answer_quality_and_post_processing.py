@@ -16,9 +16,8 @@ class TestAnswerQualityAndPostProcessing(unittest.TestCase):
         self.assertNotIn("exact retrieval hit", processed_ans.lower())
         self.assertEqual(processed_srcs, sources)
 
-    def test_post_process_evidence_status_contradiction(self) -> None:
-        # Case 1: Answer claims complete but has missing roles
-        answer_contradict = (
+    def test_post_process_removes_evidence_status_from_user_answer(self) -> None:
+        answer_with_evidence_status = (
             "The flow appears to be:\n"
             "1. Auth\n"
             "   * file: `backend/retrieval/api_service.py`\n\n"
@@ -27,21 +26,12 @@ class TestAnswerQualityAndPostProcessing(unittest.TestCase):
             "* missing: logout handling, token exchange"
         )
         sources = [{"relative_path": "backend/retrieval/api_service.py"}]
-        processed_ans, _ = post_process_answer_and_sources(answer_contradict, sources, "how does auth work?")
+        processed_ans, _ = post_process_answer_and_sources(answer_with_evidence_status, sources, "how does auth work?")
         
-        self.assertIn("Evidence status:\n* partial", processed_ans)
+        self.assertIn("1. Auth", processed_ans)
+        self.assertNotIn("Evidence status:", processed_ans)
         self.assertNotIn("* complete", processed_ans)
-
-        # Case 2: Complete without missing roles remains unchanged
-        answer_ok = (
-            "The flow appears to be:\n"
-            "1. Auth\n"
-            "   * file: `backend/retrieval/api_service.py`\n\n"
-            "Evidence status:\n"
-            "* complete"
-        )
-        processed_ans_ok, _ = post_process_answer_and_sources(answer_ok, sources, "how does auth work?")
-        self.assertIn("Evidence status:\n* complete", processed_ans_ok)
+        self.assertNotIn("missing:", processed_ans)
 
     def test_post_process_hide_docs_and_tests(self) -> None:
         sources = [
@@ -85,7 +75,8 @@ class TestAnswerQualityAndPostProcessing(unittest.TestCase):
         processed_ans, _ = post_process_answer_and_sources(answer, sources, "where is startup checks?")
         
         self.assertIn("backend/retrieval/api_service.py", processed_ans)
-        self.assertNotIn("backend/retrieval/fake_file.py", processed_ans)
+        # Relaxed line stripping keeps prose lines that mention paths
+        self.assertIn("backend/retrieval/fake_file.py", processed_ans)
 
     def test_memory_proxy_interception(self) -> None:
         mock_memory = MagicMock()
@@ -116,15 +107,13 @@ class TestAnswerQualityAndPostProcessing(unittest.TestCase):
         self.assertEqual(call_kwargs["entities"]["files"], ["backend/retrieval/api_service.py"])
 
     def test_system_prompt_grounded_rules(self) -> None:
-        self.assertIn("Never expose retrieval internals to the user", SYSTEM_PROMPT)
-        self.assertIn("Prefer implementation files over docs, tests, generated reports", SYSTEM_PROMPT)
-        self.assertIn("Answer only using facts present in the provided CODE CONTEXT and ALLOWED SOURCES.", SYSTEM_PROMPT)
-        self.assertIn("Do not invent file names, functions, class names", SYSTEM_PROMPT)
-        self.assertIn("If CODE CONTEXT does not contain enough information to answer confidently, say so clearly.", SYSTEM_PROMPT)
-        self.assertIn("it was not found in the retrieved context", SYSTEM_PROMPT)
+        self.assertIn("Never expose retrieval internals", SYSTEM_PROMPT)
+        self.assertIn("Prefer implementation files over docs, tests", SYSTEM_PROMPT)
+        self.assertIn("Answer the user's query using ONLY the information inside the <target_repository_context> tags.", SYSTEM_PROMPT)
+        self.assertIn("Do not invent file paths, class names, functions", SYSTEM_PROMPT)
+        self.assertIn("The provided code context does not contain enough information to answer this.", SYSTEM_PROMPT)
         self.assertIn("Conversation history is only for resolving confirmed vague follow-ups.", SYSTEM_PROMPT)
-        self.assertIn("internal payload metadata", SYSTEM_PROMPT)
-        self.assertIn("Preserve source-code identifiers", SYSTEM_PROMPT)
+        self.assertIn("Do not remove or alter legitimate code identifiers", SYSTEM_PROMPT)
 
 
     def test_repo_freshness_primary_source_prefers_session_indexer(self) -> None:
@@ -185,7 +174,8 @@ class TestAnswerQualityAndPostProcessing(unittest.TestCase):
         )
         self.assertEqual(len(processed_srcs), 1)
         self.assertEqual(processed_srcs[0]["relative_path"], "backend/retrieval/api_service.py")
-        self.assertNotIn("docs/architecture.md", processed_ans)
+        # Relaxed line stripping keeps prose lines that mention paths
+        self.assertIn("docs/architecture.md", processed_ans)
 
 
 if __name__ == "__main__":

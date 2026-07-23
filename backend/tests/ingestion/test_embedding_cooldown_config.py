@@ -14,10 +14,14 @@ class EmbeddingCooldownConfigTests(unittest.TestCase):
         importlib.reload(config_module)
         return importlib.reload(embedder_module)
 
-    def _mock_model(self):
-        mock_model = MagicMock()
-        mock_model.encode.side_effect = lambda inputs, **kwargs: __import__("numpy").zeros((len(inputs), 384))
-        return mock_model
+    def _mock_provider(self):
+        mock_provider = MagicMock()
+        mock_provider.embed_texts.side_effect = lambda inputs, **kwargs: [[0.0]*384 for _ in range(len(inputs))]
+        mock_config = MagicMock()
+        mock_config.provider = "local"
+        mock_config.effective_model = "mock-model"
+        mock_config.dimensions = 384
+        return mock_config, mock_provider
 
     def test_missing_env_vars_disable_embedding_cooldown(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -25,7 +29,7 @@ class EmbeddingCooldownConfigTests(unittest.TestCase):
             chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(400)]
             counters = PipelineCounters()
 
-            with patch.object(embedder, "_get_model", return_value=self._mock_model()), \
+            with patch.object(embedder, "_get_provider", return_value=self._mock_provider()), \
                  patch.object(embedder, "_sleep") as mock_sleep:
                 embedder.embed_chunks(chunks, counters)
 
@@ -46,7 +50,7 @@ class EmbeddingCooldownConfigTests(unittest.TestCase):
             chunks = [Chunk(relative_path=f"file{i}.py", content="pass") for i in range(400)]
             counters = PipelineCounters()
 
-            with patch.object(embedder, "_get_model", return_value=self._mock_model()), \
+            with patch.object(embedder, "_get_provider", return_value=self._mock_provider()), \
                  patch.object(embedder, "_sleep") as mock_sleep:
                 embedder.embed_chunks(chunks, counters)
 
@@ -57,3 +61,4 @@ class EmbeddingCooldownConfigTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

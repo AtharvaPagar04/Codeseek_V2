@@ -753,7 +753,7 @@ export const getEmbeddingConfig = async () => {
 };
 
 export const saveEmbeddingConfig = async (payload) => {
-  const { mode, provider, baseUrl, model, apiKey, dimensions, timeoutSeconds, batchSize } = payload;
+  const { mode, provider, baseUrl, model, apiKey, timeoutSeconds, batchSize } = payload;
   const normalizedApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
   let encryptedSecret = null;
   if (normalizedApiKey && mode !== 'local') {
@@ -771,7 +771,6 @@ export const saveEmbeddingConfig = async (payload) => {
           base_url: baseUrl,
           model,
           encrypted_secret: encryptedSecret || undefined,
-          dimensions,
           timeout_seconds: timeoutSeconds,
           batch_size: batchSize,
         }),
@@ -783,7 +782,7 @@ export const saveEmbeddingConfig = async (payload) => {
 };
 
 export const testEmbeddingConfig = async (payload) => {
-  const { mode, provider, baseUrl, model, apiKey, dimensions } = payload;
+  const { mode, provider, baseUrl, model, apiKey } = payload;
   const normalizedApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
   let encryptedSecret = null;
   if (normalizedApiKey && mode !== 'local') {
@@ -801,7 +800,6 @@ export const testEmbeddingConfig = async (payload) => {
           base_url: baseUrl,
           model,
           encrypted_secret: encryptedSecret || undefined,
-          dimensions,
         }),
       }),
     'Test embedding config'

@@ -316,7 +316,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
              patch("retrieval.main.select_sources_for_display", return_value=self.sources), \
              patch("retrieval.main.generate_answer", return_value="Here is an explanation of auth."):
             ans, sources, _ = run_query("explain how auth works", memory)
-            self.assertIn("The flow appears to be:", ans)
+            self.assertIn("1. Auth entrypoint", ans)
             self.assertNotIn("```python", ans)
 
     def test_source_location_auth_query_still_uses_source_location_mode(self):
@@ -504,7 +504,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         def _query_state_text(query_info: dict) -> str:
             return " ".join(
                 str(query_info.get(field, ""))
-                for field in ("raw_query", "follow_up_resolved_to", "follow_up_to")
+                for field in ("raw_query", "follow_up_resolved_to", "follow_up_to", "followup_hint", "follow_up_anchor_paths", "follow_up_anchor_symbols")
             ).lower()
 
         def record_search(query_info: dict) -> list[dict]:
@@ -657,7 +657,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         def _query_state_text(query_info: dict) -> str:
             return " ".join(
                 str(query_info.get(field, ""))
-                for field in ("raw_query", "follow_up_resolved_to", "follow_up_to")
+                for field in ("raw_query", "follow_up_resolved_to", "follow_up_to", "followup_hint", "follow_up_anchor_paths", "follow_up_anchor_symbols")
             ).lower()
 
         def record_search(query_info: dict) -> list[dict]:
@@ -1158,7 +1158,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
              patch("retrieval.main.generate_answer", return_value="Here is how auth works."):
             ans2, _, _ = run_query("explain how auth works", memory)
             self.assertNotIn("```", ans2)
-            self.assertIn("The flow appears to be:", ans2)
+            self.assertIn("1. Auth entrypoint", ans2)
 
     @patch("retrieval.generation.code_answers._read_source_excerpt")
     def test_sequence_code_to_source_location(self, mock_read) -> None:

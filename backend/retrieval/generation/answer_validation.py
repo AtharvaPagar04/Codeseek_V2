@@ -162,6 +162,25 @@ def validate_generated_answer(
             reasons=cleaned_reasons,
         )
 
+    # Check for failure recovery speculation
+    if query_info and query_info.get("source_intent") == "failure_recovery":
+        speculation_words = {"could", "potentially", "may", "might", "perhaps", "probably", "hypothetically"}
+        ans_words = set(re.findall(r"\b[a-zA-Z]+\b", cleaned_answer.lower()))
+        if ans_words.intersection(speculation_words):
+            return {
+                "valid": False,
+                "repaired_answer": "I found no implementation for failure recovery in the provided context. The repository contains unimplemented recovery behavior for this scenario.",
+                "repaired_sources": [],
+                "reasons": cleaned_reasons + ["unsupported_speculation"],
+                "numeric_grounding": {
+                    "enabled": False,
+                    "claims": [],
+                    "verified_values": [],
+                    "failed_values": [],
+                    "numeric_grounding_failed": False,
+                }
+            }
+
     # Phase 5: Wrong-evidence answer validation
     if query_info and "framework_routing" in query_info:
         source_intent = query_info["framework_routing"].get("query_type", "general")
@@ -397,17 +416,16 @@ def _validate_docs_summary(
             "reasons": reasons + ["low_context"],
         }
 
-    docs_answer = build_docs_summary_answer(raw_query, docs_sources, docs_sources)
-    impl_phrases = (
-        "the implementation is in",
-        "implemented in",
-        "symbol/function",
-        "source-location",
-    )
-    invalid_impl_language = any(phrase in answer.lower() for phrase in impl_phrases)
-    valid = not invalid_impl_language and not reasons
     repaired_sources = _prune_sources_to_allowed(docs_sources, _source_paths(docs_sources))
-    if not valid:
+
+    # Only trigger a rebuild when the answer is empty or hard grounding failures exist.
+    # Do NOT rebuild just because the prose happens to say "implemented in" —
+    # that is natural language, not a formatting violation.
+    answer_is_empty = not answer.strip()
+    hard_failure = bool(reasons)  # path-strip failures injected by _strip_outside_code_blocks
+
+    if answer_is_empty or hard_failure:
+        docs_answer = build_docs_summary_answer(raw_query, docs_sources, docs_sources)
         return {
             "valid": False,
             "repaired_answer": docs_answer.strip(),

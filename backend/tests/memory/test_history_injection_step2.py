@@ -107,6 +107,8 @@ def test_unrelated_new_query_blocks_history_in_assembly_and_prompt() -> None:
             "retrieval.main.score_evidence_confidence",
             return_value={"level": "strong", "reason": "matched file", "count": 1},
         ), patch("retrieval.main.is_code_request", return_value=False), patch(
+            "retrieval.generation.code_answers.is_file_summary_request", return_value=False
+        ), patch(
             "retrieval.main.is_architecture_request", return_value=False
         ), patch("retrieval.main.is_overview_request", return_value=False), patch(
             "retrieval.main.is_flow_explanation_request", return_value=False

@@ -81,6 +81,20 @@ class SystemIgnoreRulesTests(unittest.TestCase):
                 ext = "." + name.rsplit(".", 1)[-1] if "." in name else ""
                 self.assertFalse(_is_system_ignored(_make_file(name, ext)))
 
+    def test_source_test_files_are_indexable(self) -> None:
+        test_files = [
+            "tests/helper.py",
+            "test/index.js",
+            "src/__tests__/app.test.js",
+            "src/components/button.spec.tsx",
+            "backend/retrieval/session_indexer_test.py",
+            "backend/retrieval/test_session_indexer.py",
+        ]
+        for path in test_files:
+            with self.subTest(path=path):
+                ext = "." + path.rsplit(".", 1)[-1] if "." in path else ""
+                self.assertFalse(_is_system_ignored(_make_file(path, ext)))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -346,7 +346,7 @@ def compute_dynamic_boosts_and_penalties(item: dict, raw_query: str, entities: d
     # Classify source kind
     kind = profile.classify_source_kind(rel_path, item.get("language"), item.get("labels"))
     
-    requests_frontend = any(t in query_lower for t in ["frontend", "ui", "component", "components", "page", "pages", "react", "jsx", "tsx", "display component"])
+    requests_frontend = any(t in query_lower for t in ["frontend", "ui", "component", "components", "page", "pages", "react", "jsx", "tsx", "display component", "render", "rendered", "rendering", "display", "displayed", "showing", "view", "views"])
     requests_tests = any(t in query_lower for t in ["test", "tests", "unit test", "integration test", "eval", "evals", "metrics", "audit", "fixture"])
     requests_docs = any(t in query_lower for t in ["doc", "docs", "documentation", "readme", "plan", "report"])
     
@@ -406,7 +406,7 @@ def build_diagnostics(candidates: list[dict], raw_query: str, entities: dict, co
         "stored", "done"
     ]
     is_impl_query = any(ind in query_lower for ind in impl_indicators)
-    requests_frontend = any(t in query_lower for t in ["frontend", "ui", "component", "components", "page", "pages", "react", "jsx", "tsx"])
+    requests_frontend = any(t in query_lower for t in ["frontend", "ui", "component", "components", "page", "pages", "react", "jsx", "tsx", "display component", "render", "rendered", "rendering", "display", "displayed", "showing", "view", "views"])
     requests_tests = any(t in query_lower for t in ["test", "tests", "unit test", "integration test", "eval", "evals", "metrics", "audit"])
     requests_docs = any(t in query_lower for t in ["doc", "docs", "documentation", "readme"])
     

@@ -1047,7 +1047,7 @@ test('testEmbeddingConfig sends correct local payload without encryption', async
     assert.equal(body.provider, 'local');
     assert.equal(body.base_url, 'http://localhost:11434');
     assert.equal(body.model, 'nomic-embed-text:latest');
-    assert.equal(body.dimensions, 768);
+    assert.equal(body.dimensions, undefined);
     assert.equal(body.encrypted_secret, undefined);
   } finally {
     globalThis.fetch = originalFetch;
@@ -1106,6 +1106,7 @@ test('saveEmbeddingConfig in API mode with empty apiKey does not include encrypt
     });
     assert.equal(finalBody.mode, 'api');
     assert.equal(finalBody.provider, 'openai_compatible');
+    assert.equal(finalBody.dimensions, undefined);
     assert.equal(finalBody.encrypted_secret, undefined);
   } finally {
     globalThis.fetch = originalFetch;

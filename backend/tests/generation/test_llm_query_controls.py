@@ -31,9 +31,9 @@ class LlmQueryControlsTests(unittest.TestCase):
                 )
 
         payload = mock_post.call_args.kwargs["json"]
-        self.assertEqual(payload["max_tokens"], 1024)
+        self.assertEqual(payload["max_tokens"], 2048)
         self.assertEqual(payload["options"]["num_ctx"], 4096)
-        self.assertEqual(payload["options"]["num_predict"], 1024)
+        self.assertEqual(payload["options"]["num_predict"], 2048)
         self.assertEqual(payload["keep_alive"], "0s")
 
     def test_local_query_env_overrides_are_respected(self) -> None:
@@ -83,9 +83,9 @@ class LlmQueryControlsTests(unittest.TestCase):
                 )
 
         payload = mock_post.call_args.kwargs["json"]
-        self.assertEqual(payload["max_tokens"], 1024)
+        self.assertEqual(payload["max_tokens"], 2048)
         self.assertEqual(payload["options"]["num_ctx"], 4096)
-        self.assertEqual(payload["options"]["num_predict"], 1024)
+        self.assertEqual(payload["options"]["num_predict"], 2048)
         self.assertEqual(payload["keep_alive"], "45s")
 
     def test_non_local_provider_payload_is_unaffected(self) -> None:
@@ -134,9 +134,9 @@ class LlmQueryControlsTests(unittest.TestCase):
                 )
 
         payload = mock_post.call_args.kwargs["json"]
-        self.assertEqual(payload["max_tokens"], 1024)
+        self.assertEqual(payload["max_tokens"], 2048)
         self.assertEqual(payload["options"]["num_ctx"], 4096)
-        self.assertEqual(payload["options"]["num_predict"], 1024)
+        self.assertEqual(payload["options"]["num_predict"], 2048)
         self.assertEqual(payload["keep_alive"], "0s")
 
 

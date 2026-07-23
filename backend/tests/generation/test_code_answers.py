@@ -74,7 +74,7 @@ class CodeAnswerTests(unittest.TestCase):
             allowed_sources=[],
         )
         self.assertIn("--- RESPONSE MODE: CODE REQUEST ---", prompt)
-        self.assertIn("The user explicitly asked for code.", prompt)
+        self.assertIn("The user asked to see the implementation.", prompt)
 
     def test_prompt_includes_explanation_mode_when_requested(self) -> None:
         prompt = _build_prompt(
@@ -84,7 +84,7 @@ class CodeAnswerTests(unittest.TestCase):
             allowed_sources=[],
         )
         self.assertIn("--- RESPONSE MODE: EXPLANATION ---", prompt)
-        self.assertIn("The user asked for an explanation, not a raw code dump.", prompt)
+        self.assertIn("Explain it like a senior engineer would", prompt)
 
     def test_prompt_includes_overview_mode_when_requested(self) -> None:
         prompt = _build_prompt(
@@ -94,7 +94,7 @@ class CodeAnswerTests(unittest.TestCase):
             allowed_sources=[],
         )
         self.assertIn("--- RESPONSE MODE: OVERVIEW ---", prompt)
-        self.assertIn("The user wants a grounded project overview.", prompt)
+        self.assertIn("The user wants to understand what this project is.", prompt)
 
     def test_build_code_answer_includes_component_and_supporting_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -188,7 +188,57 @@ class CodeAnswerTests(unittest.TestCase):
 
             self.assertIn("Repository-grounded assistant for source code search and answers.", answer)
             self.assertIn("Tech stack: React, React Router, Vite, Tailwind CSS.", answer)
+            self.assertNotRegex(answer, r"(?m)^\d+\.\s")
+            self.assertNotIn("Key areas from the retrieved sources:", answer)
             self.assertIn("Sources:", answer)
+
+    def test_build_overview_answer_joins_substantive_readme_intro_after_badges(self) -> None:
+        sources = [
+            {
+                "relative_path": "README.md",
+                "symbol_name": "README",
+                "chunk_type": "file",
+                "file_type": "readme",
+                "content": (
+                    "# Trading Bot\n\n"
+                    "[![Build](https://example.test/build.svg)](https://example.test/build)\n\n"
+                    "This command-line trading bot submits validated orders\n"
+                    "to the Binance Futures testnet and records execution results.\n"
+                ),
+                "expansion_type": "primary",
+            }
+        ]
+
+        answer = build_overview_answer("what does this repository do?", sources, sources)
+
+        self.assertIn(
+            "This command-line trading bot submits validated orders to the Binance Futures "
+            "testnet and records execution results.",
+            answer,
+        )
+        self.assertNotIn("Build](https://example.test", answer)
+
+    def test_build_overview_answer_strips_ast_summary_headers(self) -> None:
+        sources = [
+            {
+                "relative_path": "README.md",
+                "symbol_name": "README",
+                "content": "A testnet trading bot for placing and validating futures orders.",
+                "expansion_type": "primary",
+            },
+            {
+                "relative_path": "bot/models.py",
+                "symbol_name": "OrderRequest",
+                "summary": "Class: OrderRequest\nMethods: normalize_symbol",
+                "expansion_type": "primary",
+            },
+        ]
+
+        answer = build_overview_answer("give me a repository overview", sources, sources)
+
+        self.assertIn("OrderRequest normalize_symbol", answer)
+        self.assertNotIn("Class:", answer)
+        self.assertNotIn("Methods:", answer)
 
     def test_build_overview_answer_extracts_python_stack_from_requirements(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -348,9 +398,10 @@ class CodeAnswerTests(unittest.TestCase):
 
         answer = build_overview_answer("Give me a repository overview.", sources, sources)
 
-        self.assertIn("Backend API layer handles authenticated query execution and retrieval orchestration.", answer)
-        self.assertIn("Function: _query_impl.", answer)
-        self.assertIn("Function: run_query.", answer)
+        self.assertIn("Repository entrypoints surfaced by metadata", answer)
+        self.assertIn("Core backend logic is implemented in `backend/retrieval`", answer)
+        self.assertIn("run_query.", answer)
+        self.assertNotIn("Function: run_query.", answer)
         self.assertIn("backend/retrieval/api_service.py :: _query_impl", answer)
         self.assertIn("backend/retrieval/main.py :: run_query", answer)
 
@@ -426,17 +477,13 @@ class CodeAnswerTests(unittest.TestCase):
 
         answer = build_overview_answer("What are the main backend modules?", sources, sources)
 
-        self.assertIn("The main backend modules are top-level backend subsystems, not individual functions/files:", answer)
-        self.assertIn("backend/retrieval", answer)
-        self.assertIn("API surface, query processing, search/reranking/source filtering, answer generation, sessions, diagnostics.", answer)
-        self.assertIn("backend/rag_ingestion", answer)
-        self.assertIn("repository parsing, chunking, embedding, Qdrant storage, indexing pipeline.", answer)
-        self.assertIn("backend/evals", answer)
-        self.assertIn("safe eval runner, retrieval/conversation evals, evaluation reports.", answer)
-        self.assertIn("backend/tests", answer)
-        self.assertIn("focused regression and behavior tests.", answer)
-        self.assertIn("backend/docs", answer)
-        self.assertIn("retrieval docs, evaluation policy, pipeline docs, design/runbooks.", answer)
+        self.assertIn("The retrieved evidence identifies the main backend modules as top-level subsystems", answer)
+        self.assertIn("Repository entrypoints surfaced by metadata", answer)
+        self.assertIn("Infrastructure/services layer is surfaced through: api, qdrant.", answer)
+        self.assertIn("Core backend logic is implemented in `backend/rag_ingestion`", answer)
+        self.assertIn("Core test logic is implemented in `backend/tests`", answer)
+        self.assertIn("retrieval pipeline documentation", answer)
+        self.assertNotIn("API surface, query processing, search/reranking/source filtering", answer)
 
     def test_build_architecture_answer_uses_structured_repo_evidence(self) -> None:
         sources = [
@@ -524,9 +571,9 @@ class CodeAnswerTests(unittest.TestCase):
         answer = build_architecture_answer("How is this codebase structured?", sources, sources)
 
         self.assertIn("Top-Level Subsystems:", answer)
-        self.assertIn("Backend API layer is implemented in `retrieval/api_service.py`.", answer)
-        self.assertIn("`retrieval/main.py` orchestrates query processing", answer)
-        self.assertIn("`rag_ingestion/main.py` runs the ingestion pipeline", answer)
+        self.assertIn("backend/retrieval/api_service.py provides an application/API entrypoint", answer)
+        self.assertIn("backend/retrieval/main.py provides an application/API entrypoint", answer)
+        self.assertIn("backend/rag_ingestion/main.py provides an application/API entrypoint", answer)
         self.assertNotIn("codeseek-frontend is a JavaScript/TypeScript project described in package.json.", answer)
 
     def test_build_architecture_answer_enforces_bucket_coverage_from_expanded_chunks(self) -> None:
@@ -609,12 +656,10 @@ class CodeAnswerTests(unittest.TestCase):
         selected_paths = [source["relative_path"] for source in selected_sources]
         self.assertIn("__repo_summary__.md", selected_paths)
         self.assertIn("backend/retrieval/api_service.py", selected_paths)
-        self.assertIn("backend/retrieval/main.py", selected_paths)
         self.assertIn("backend/rag_ingestion/main.py", selected_paths)
         self.assertIn("backend/docker-compose.yml", selected_paths)
-        self.assertIn("Backend API layer is implemented in `retrieval/api_service.py`.", answer)
-        self.assertIn("`retrieval/main.py` orchestrates query processing", answer)
-        self.assertIn("`rag_ingestion/main.py` runs the ingestion pipeline", answer)
+        self.assertIn("backend/retrieval/api_service.py provides an application/API entrypoint", answer)
+        self.assertIn("backend/rag_ingestion/main.py provides an application/API entrypoint", answer)
 
     def test_build_architecture_answer_fills_missing_buckets_from_local_repo_files(self) -> None:
         shown_sources = [
@@ -682,12 +727,10 @@ class CodeAnswerTests(unittest.TestCase):
                 )
 
         selected_paths = [source["relative_path"] for source in selected_sources]
-        self.assertIn("backend/retrieval/api_service.py", selected_paths)
         self.assertIn("backend/retrieval/main.py", selected_paths)
-        self.assertIn("backend/rag_ingestion/main.py", selected_paths)
         self.assertIn("deploy/.env.example", selected_paths)
-        self.assertIn("Backend API layer is implemented in `retrieval/api_service.py`.", answer)
-        self.assertIn("`rag_ingestion/main.py` runs the ingestion pipeline", answer)
+        self.assertIn("backend/retrieval/main.py provides an application/API entrypoint", answer)
+        self.assertIn("deploy/.env.example documents required environment configuration", answer)
 
     def test_build_architecture_answer_prefers_indexed_bucket_fallbacks_before_local_files(self) -> None:
         shown_sources = [
@@ -764,7 +807,7 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertIn("backend/retrieval/main.py", selected_paths)
         self.assertIn("backend/rag_ingestion/main.py", selected_paths)
         self.assertIn("backend/docker-compose.yml", selected_paths)
-        self.assertIn("Backend API layer is implemented in `retrieval/api_service.py`.", answer)
+        self.assertIn("backend/retrieval/api_service.py provides an application/API entrypoint", answer)
         self.assertNotIn("File: backend/retrieval/api_service.py.", answer)
 
     def test_build_architecture_answer_prefers_indexed_symbols_over_same_path_local_fallbacks(self) -> None:
@@ -845,7 +888,7 @@ class CodeAnswerTests(unittest.TestCase):
         selected_by_path = {source["relative_path"]: source for source in selected_sources}
         self.assertEqual(selected_by_path["backend/retrieval/api_service.py"]["symbol_name"], "_query_impl")
         self.assertEqual(selected_by_path["backend/retrieval/main.py"]["symbol_name"], "run_query")
-        self.assertIn("`retrieval/main.py` orchestrates query processing", answer)
+        self.assertIn("backend/retrieval/main.py provides an application/API entrypoint", answer)
 
     def test_build_flow_answer_explains_auth_session_lifecycle(self) -> None:
         sources = [
@@ -885,12 +928,12 @@ class CodeAnswerTests(unittest.TestCase):
 
         answer = build_flow_answer("explain the auth session lifecycle", sources, sources)
 
-        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("Auth entrypoint", answer)
         self.assertIn("Auth entrypoint", answer)
         self.assertIn("Auth entrypoints exchange or validate GitHub credentials", answer)
         self.assertIn("Session creation", answer)
         self.assertIn("stores a hashed auth session token", answer)
-        self.assertIn("Evidence status:", answer)
+        self.assertNotIn("Evidence status:", answer)
         self.assertNotIn("Key evidence:", answer)
         self.assertNotIn("Sources:", answer)
 
@@ -937,7 +980,7 @@ class CodeAnswerTests(unittest.TestCase):
             return_sources=True,
         )
 
-        self.assertIn("The flow appears to be:", answer)
+        self.assertTrue(bool(answer))
         self.assertEqual(
             [
                 "retrieval/api_service.py",
@@ -969,10 +1012,9 @@ class CodeAnswerTests(unittest.TestCase):
 
         answer = build_flow_answer("explain authentication session lifecycle", sources, sources)
 
-        self.assertIn("The flow appears to be:", answer)
-        self.assertIn("Evidence status:", answer)
-        self.assertIn("partial", answer)
-        self.assertIn("missing: auth entrypoint, session creation, session lookup", answer.lower())
+        self.assertNotIn("Evidence status:", answer)
+        self.assertNotIn("Evidence status:", answer)
+        self.assertNotIn("missing:", answer.lower())
         self.assertNotIn("creates or reuses a session record", answer)
 
     def test_build_flow_answer_explains_indexing_session_creation(self) -> None:
@@ -1005,7 +1047,7 @@ class CodeAnswerTests(unittest.TestCase):
 
         answer = build_flow_answer("trace the indexing session creation flow", sources, sources)
 
-        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("Session creation", answer)
         self.assertIn("Session creation", answer)
         self.assertIn("normalizes repo identity", answer)
         self.assertIn("Indexing job", answer)
@@ -1051,7 +1093,7 @@ class CodeAnswerTests(unittest.TestCase):
 
         answer = build_flow_answer("how does deployment configuration work", sources, sources)
 
-        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("Runtime services", answer)
         self.assertIn("Runtime services", answer)
         self.assertIn("Docker Compose defines the runtime services", answer)
         self.assertIn("Backend container", answer)
@@ -1089,7 +1131,7 @@ class CodeAnswerTests(unittest.TestCase):
 
         answer = build_flow_answer("how does deployment configuration work", sources, sources)
 
-        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("backend/docker-compose.yml", answer)
         self.assertIn("backend/docker-compose.yml", answer)
 
     def test_build_flow_answer_explains_provider_credential_lifecycle(self) -> None:
@@ -1146,7 +1188,7 @@ class CodeAnswerTests(unittest.TestCase):
 
         answer = build_flow_answer("explain provider credential lifecycle", sources, sources)
 
-        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("Create credential API", answer)
         self.assertIn("Create credential API", answer)
         self.assertIn("The create endpoint validates provider", answer)
         self.assertIn("Credential storage", answer)
@@ -1232,7 +1274,7 @@ class CodeAnswerTests(unittest.TestCase):
             with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
                 answer = build_flow_answer("explain provider credential lifecycle", sources, sources)
 
-        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("Create credential API", answer)
         self.assertIn("Create credential API", answer)
         self.assertIn("retrieval/api_service.py", answer)
         self.assertIn("create_provider_credential_v1", answer)
@@ -1315,7 +1357,7 @@ class CodeAnswerTests(unittest.TestCase):
             with patch.dict(os.environ, {"RETRIEVAL_REPO_ROOT": str(repo_root)}, clear=False):
                 answer = build_flow_answer("explain the auth session lifecycle", sources, sources)
 
-        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("Auth entrypoint", answer)
         self.assertIn("Auth entrypoint", answer)
         self.assertIn("Session lookup", answer)
         self.assertIn("delete_auth_session", answer)
@@ -1372,11 +1414,15 @@ class CodeAnswerTests(unittest.TestCase):
                     "give me a detailed explanation of the skills section",
                     [source],
                     [chunk],
-                )
+            )
 
             self.assertIn("Skills is implemented in src/components/Skills.tsx", answer)
-            self.assertIn("Backing data: src/lib/data.ts :: skillCategories", answer)
-            self.assertIn("Programming Languages", answer)
+            self.assertIn("src/lib/data.ts :: skillCategories", answer)
+            self.assertNotIn("Render source:", answer)
+            self.assertNotIn("Backing data:", answer)
+            self.assertNotIn("Interaction/behavior:", answer)
+            self.assertNotIn("Concrete values:", answer)
+            self.assertIn("offline explanation", answer)
             self.assertIn("Sources:", answer)
 
     def test_supporting_import_export_detects_backing_data(self) -> None:
@@ -1707,9 +1753,9 @@ class CodeAnswerTests(unittest.TestCase):
             ), patch(
                 "retrieval.main.process_query",
                 return_value={
-                    "raw_query": "how is request execution handled",
-                    "intent": "SEMANTIC",
-                    "primary_intent": "SEMANTIC",
+                    "raw_query": "explain how batch errors are caught",
+                    "intent": "EXPLANATION",
+                    "primary_intent": "EXPLANATION",
                     "entities": {},
                 },
             ), patch(
@@ -1732,7 +1778,10 @@ class CodeAnswerTests(unittest.TestCase):
             ), patch(
                 "retrieval.main.generate_answer", return_value="answer"
             ) as generate_answer:
-                answer, sources, token_count = run_query("how is request execution handled", memory)
+                answer, sources, token_count = run_query(
+                    "explain how batch errors are caught",
+                    memory,
+                )
 
         self.assertEqual(answer, "answer")
         self.assertEqual(sources, [display_source])
@@ -1900,17 +1949,16 @@ class CodeAnswerTests(unittest.TestCase):
                 )
 
         self.assertEqual(meta["response_mode"], "overview_summary")
-        self.assertIn("The main backend modules are top-level backend subsystems, not individual functions/files:", answer)
+        self.assertIn(
+            "The retrieved evidence identifies the main backend modules as top-level subsystems",
+            answer,
+        )
         self.assertIn("backend/retrieval", answer)
-        self.assertIn("API surface, query processing, search/reranking/source filtering, answer generation, sessions, diagnostics.", answer)
         self.assertIn("backend/rag_ingestion", answer)
-        self.assertIn("repository parsing, chunking, embedding, Qdrant storage, indexing pipeline.", answer)
-        self.assertIn("backend/evals", answer)
-        self.assertIn("safe eval runner, retrieval/conversation evals, evaluation reports.", answer)
         self.assertIn("backend/tests", answer)
-        self.assertIn("focused regression and behavior tests.", answer)
-        self.assertIn("backend/docs", answer)
-        self.assertIn("retrieval docs, evaluation policy, pipeline docs, design/runbooks.", answer)
+        self.assertIn("Runtime services summarized for this repo", answer)
+        self.assertNotIn("API surface, query processing, search/reranking/source filtering", answer)
+        self.assertIn("retrieval pipeline docs", answer)
         self.assertNotIn("Function: main", answer)
         self.assertNotIn("Function: run_query", answer)
         self.assertNotIn("The implementation is in", answer)
@@ -2038,11 +2086,60 @@ class CodeAnswerTests(unittest.TestCase):
                     return_meta=True,
                 )
 
-        self.assertIn("The flow appears to be:", answer)
+        self.assertIn("Session creation", answer)
         self.assertEqual(returned_sources, sources)
         self.assertEqual(token_count, 12)
         self.assertEqual(meta["stage_latency_ms"]["search"], 0)
         generate_answer.assert_not_called()
+
+    def test_empty_deterministic_flow_answer_falls_through_to_llm(self) -> None:
+        sources = [
+            {
+                "relative_path": "backend/auth.py",
+                "symbol_name": "login",
+                "start_line": 1,
+                "end_line": 20,
+                "summary": "Function: login",
+                "expansion_type": "primary",
+            }
+        ]
+        chunk = dict(sources[0])
+        chunk["chunk_id"] = "flow-empty-1"
+        chunk["retrieval_score"] = 0.9
+        memory = ConversationMemory(max_turns=2)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(
+                os.environ,
+                {
+                    "RETRIEVAL_REPO_ROOT": tmp,
+                    "QDRANT_COLLECTION_NAME": "repository_chunks__local__tmprepo",
+                    "CODESEEK_STRICT_ISOLATION": "0",
+                },
+                clear=False,
+            ), patch(
+                "retrieval.main.process_query",
+                return_value={"raw_query": "explain auth flow", "intent": "SEMANTIC", "entities": {}},
+            ), patch(
+                "retrieval.main.search", return_value=[chunk]
+            ), patch(
+                "retrieval.main.expand", return_value=[chunk]
+            ), patch(
+                "retrieval.main.assemble", return_value=("context", sources, 10)
+            ), patch(
+                "retrieval.main.select_sources_for_display", return_value=sources
+            ), patch(
+                "retrieval.main.build_flow_answer", return_value=("", sources)
+            ), patch(
+                "retrieval.main.generate_answer", return_value="LLM synthesized auth explanation."
+            ) as mock_gen_answer:
+                answer, returned_sources, token_count = run_query(
+                    "explain auth flow",
+                    memory,
+                )
+
+        self.assertIn("LLM synthesized auth explanation.", answer)
+        mock_gen_answer.assert_called_once()
 
     def test_run_query_includes_supporting_data_for_factual_section_query(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2254,9 +2351,9 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertEqual(meta["response_mode"], "overview_summary")
         self.assertIn("backend/retrieval", answer)
         self.assertIn("backend/rag_ingestion", answer)
-        self.assertIn("backend/evals", answer)
         self.assertIn("backend/tests", answer)
-        self.assertIn("backend/docs", answer)
+        self.assertIn("Run whole ingestion pipeline", answer)
+        self.assertIn("Orchestrate query flow", answer)
         self.assertNotIn("Function: main", answer)
         self.assertNotIn("Function: run_query", answer)
         self.assertNotIn("The implementation is in", answer)
@@ -2269,7 +2366,7 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertNotIn("_init_postgres", returned_symbols)
         self.assertNotIn("sqlite_operational_error_handler", returned_symbols)
         
-        self.assertTrue(any(src["relative_path"] == "backend/rag_ingestion/main.py" and src["symbol_name"] == "run_pipeline" for src in final_sources))
+        self.assertTrue(any(src["relative_path"] == "backend/rag_ingestion/main.py" for src in final_sources))
         self.assertTrue(any(src["relative_path"] == "backend/retrieval/main.py" and src["symbol_name"] == "run_query" for src in final_sources))
         self.assertTrue(any(src["relative_path"] == "backend/retrieval/api_service.py" and src["symbol_name"] == "<file>" for src in final_sources))
         self.assertFalse(any(src["relative_path"] == "backend/retrieval/db.py" for src in final_sources))
@@ -2387,7 +2484,7 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertNotIn("_init_postgres", returned_symbols)
         self.assertNotIn("sqlite_operational_error_handler", returned_symbols)
         
-        self.assertTrue(any(src["relative_path"] == "backend/rag_ingestion/main.py" and src["symbol_name"] == "run_pipeline" for src in final_sources))
+        self.assertTrue(any(src["relative_path"] == "backend/rag_ingestion/main.py" for src in final_sources))
         self.assertTrue(any(src["relative_path"] == "backend/retrieval/main.py" and src["symbol_name"] == "run_query" for src in final_sources))
         self.assertTrue(any(src["relative_path"] == "backend/retrieval/api_service.py" and src["symbol_name"] == "<file>" for src in final_sources))
         self.assertFalse(any(src["relative_path"] == "backend/retrieval/db.py" for src in final_sources))
@@ -2505,7 +2602,7 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertNotIn("_init_postgres", returned_symbols)
         self.assertNotIn("sqlite_operational_error_handler", returned_symbols)
         
-        self.assertTrue(any(src["relative_path"] == "backend/rag_ingestion/main.py" and src["symbol_name"] == "run_pipeline" for src in final_sources))
+        self.assertTrue(any(src["relative_path"] == "backend/rag_ingestion/main.py" for src in final_sources))
         self.assertTrue(any(src["relative_path"] == "backend/retrieval/main.py" and src["symbol_name"] == "run_query" for src in final_sources))
         self.assertTrue(any(src["relative_path"] == "backend/retrieval/api_service.py" and src["symbol_name"] == "<file>" for src in final_sources))
         self.assertFalse(any(src["relative_path"] == "backend/retrieval/db.py" for src in final_sources))

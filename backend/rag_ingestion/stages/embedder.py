@@ -191,10 +191,10 @@ def unload_embedding_model() -> None:
     invocation.  This is intentional: it allows the OS to reclaim any CUDA
     or CPU memory that was held by the model weights.
     """
-    unload_local_embedding_model()
-    gc.collect()
-    clear_python_cuda_cache("after embedding model unload")
-    logger.info("Embedding model reference released")
+    if unload_local_embedding_model():
+        gc.collect()
+        clear_python_cuda_cache("after embedding model unload")
+        logger.info("Embedding model reference released")
 
 
 def _line(label: str, value: str | None) -> list[str]:

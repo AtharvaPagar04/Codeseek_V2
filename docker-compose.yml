@@ -1,15 +1,18 @@
 services:
+  # ---------------------------------------------------------------------------
+  # Data Layer
+  # ---------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-codeseek}
-      POSTGRES_USER: ${POSTGRES_USER:-codeseek}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-codeseek_secure_db_password}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-codeseek} -d $${POSTGRES_DB:-codeseek}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -22,18 +25,22 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
     healthcheck:
-      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/6333' || exit 1"]
+      test: [ "CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/${QDRANT_PORT}' || exit 1" ]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - codeseek_net
 
+  # ---------------------------------------------------------------------------
+  # Application Layer
+  # ---------------------------------------------------------------------------
   backend:
     build:
       context: ./backend
       args:
-        BUILD_PROFILE: cpu
+        BUILD_PROFILE: ${BUILD_PROFILE:-cpu}
+        BACKEND_PORT: ${BACKEND_PORT}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -43,18 +50,19 @@ services:
     env_file:
       - .env
     environment:
-      CODESEEK_DB_BACKEND: postgres
-      CODESEEK_DATABASE_URL: postgresql://${POSTGRES_USER:-codeseek}:${POSTGRES_PASSWORD:-codeseek_secure_db_password}@postgres:5432/${POSTGRES_DB:-codeseek}
+      CODESEEK_DB_BACKEND: ${CODESEEK_DB_BACKEND}
+      CODESEEK_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       QDRANT_HOST: qdrant
-      QDRANT_PORT: 6333
-      QDRANT_URL: http://qdrant:6333
+      QDRANT_PORT: ${QDRANT_PORT}
+      QDRANT_URL: http://qdrant:${QDRANT_PORT}
       CODESEEK_REPO_WORKSPACE: /data/repo_workspace
+      CODESEEK_CORS_ORIGINS: ${CODESEEK_CORS_ORIGINS}
     volumes:
       - repo_workspace:/data/repo_workspace
-    ports:
-      - "8000:8000"
+    expose:
+      - "${BACKEND_PORT}"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/api/v1/health || exit 1"]
+      test: [ "CMD-SHELL", "curl -fsS http://127.0.0.1:${BACKEND_PORT}/api/v1/health || exit 1" ]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -65,19 +73,21 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_API_BASE_URL: /api
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
     restart: unless-stopped
-    depends_on:
-      backend:
-        condition: service_healthy
+    environment:
+      ALLOWED_HOST: ${ALLOWED_HOST:-_}
     healthcheck:
-      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:80/healthz || exit 1"]
+      test: [ "CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:80/healthz || exit 1" ]
       interval: 15s
       timeout: 5s
       retries: 5
     networks:
       - codeseek_net
 
+  # ---------------------------------------------------------------------------
+  # Edge / Proxy Layer
+  # ---------------------------------------------------------------------------
   caddy:
     image: caddy:2.8-alpine
     restart: unless-stopped
@@ -87,12 +97,14 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "80:80"
-      - "443:443"
+      - "${CADDY_PORT}:${CADDY_PORT}"
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    environment:
+      CADDY_PORT: ${CADDY_PORT}
+      BACKEND_PORT: ${BACKEND_PORT}
     networks:
       - codeseek_net
 

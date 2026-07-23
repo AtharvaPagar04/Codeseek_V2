@@ -160,9 +160,9 @@ class SessionCleanupTests(unittest.TestCase):
         """delete_session removes session row from DB."""
         session_id = self.session["id"]
 
-        with patch("retrieval.session_indexer.QdrantClient") as mock_qdrant:
+        with patch("retrieval.session_indexer.create_qdrant_client") as mock_create_qdrant:
             mock_client = MagicMock()
-            mock_qdrant.return_value = mock_client
+            mock_create_qdrant.return_value = mock_client
 
             result = session_indexer.delete_session(session_id)
 
@@ -184,9 +184,9 @@ class SessionCleanupTests(unittest.TestCase):
         self._insert_file_chunk(file_id)
         self._insert_chat_message(session_id)
 
-        with patch("retrieval.session_indexer.QdrantClient") as mock_qdrant:
+        with patch("retrieval.session_indexer.create_qdrant_client") as mock_create_qdrant:
             mock_client = MagicMock()
-            mock_qdrant.return_value = mock_client
+            mock_create_qdrant.return_value = mock_client
             result = session_indexer.delete_session(session_id)
 
         self.assertTrue(result["deleted"])
@@ -198,6 +198,47 @@ class SessionCleanupTests(unittest.TestCase):
             self._row_count("session_file_chunks", "session_file_id", file_id), 0
         )
         self.assertEqual(self._row_count("chat_messages", "session_id", session_id), 0)
+
+    def test_delete_session_removes_unshared_repo_workspace_state(self):
+        """delete_session removes stale incremental state for an unshared managed workspace."""
+        session_id = self.session["id"]
+        repo_root = Path(self.session["repo_root"])
+        repo_root.mkdir(parents=True, exist_ok=True)
+        state_file = repo_root / ".rag_ingestion_state.json"
+        state_file.write_text('{"src/main.py": {"size_bytes": 10, "mtime_ns": 20}}', encoding="utf-8")
+
+        with patch("retrieval.session_indexer.create_qdrant_client") as mock_create_qdrant:
+            mock_create_qdrant.return_value = MagicMock()
+            result = session_indexer.delete_session(session_id)
+
+        self.assertTrue(result["deleted"])
+        self.assertTrue(result["repo_workspace_deleted"])
+        self.assertFalse(repo_root.exists())
+
+    def test_delete_session_preserves_shared_repo_workspace_and_collection(self):
+        """delete_session does not remove workspace/vector data still referenced by another session."""
+        other_user = auth_store.upsert_github_user("other-gh", "other-user", "")
+        shared = session_indexer.create_session(
+            repo_full_name=self.session["repo_full_name"],
+            tenant_id=self.session["tenant_id"],
+            user_id=other_user["id"],
+        )
+        session_indexer._update_session(shared["id"], status="ready")
+
+        repo_root = Path(self.session["repo_root"])
+        repo_root.mkdir(parents=True, exist_ok=True)
+        (repo_root / ".rag_ingestion_state.json").write_text("{}", encoding="utf-8")
+
+        with patch("retrieval.session_indexer.create_qdrant_client") as mock_create_qdrant:
+            mock_client = MagicMock()
+            mock_create_qdrant.return_value = mock_client
+            result = session_indexer.delete_session(self.session["id"])
+
+        self.assertTrue(result["deleted"])
+        self.assertIsNone(result["repo_workspace_deleted"])
+        self.assertIsNone(result["qdrant_collection_deleted"])
+        self.assertTrue(repo_root.exists())
+        mock_client.delete_collection.assert_not_called()
 
     def test_delete_active_indexing_session_blocked(self):
         """delete_session raises RuntimeError when a live job thread is running."""
@@ -229,8 +270,8 @@ class SessionCleanupTests(unittest.TestCase):
         job_b = create_indexing_job(session_b, "full", "succeeded")
         file_b = self._insert_session_file(session_b, "src/other.py")
 
-        with patch("retrieval.session_indexer.QdrantClient") as mock_qdrant:
-            mock_qdrant.return_value = MagicMock()
+        with patch("retrieval.session_indexer.create_qdrant_client") as mock_create_qdrant:
+            mock_create_qdrant.return_value = MagicMock()
             session_indexer.delete_session(session_a)
 
         # Session B still exists
@@ -244,9 +285,9 @@ class SessionCleanupTests(unittest.TestCase):
         session = session_indexer.get_session(session_id)
         collection = session.get("collection", "")
 
-        with patch("retrieval.session_indexer.QdrantClient") as mock_qdrant:
+        with patch("retrieval.session_indexer.create_qdrant_client") as mock_create_qdrant:
             mock_client = MagicMock()
-            mock_qdrant.return_value = mock_client
+            mock_create_qdrant.return_value = mock_client
             result = session_indexer.delete_session(session_id)
 
         if collection:
@@ -268,10 +309,10 @@ class SessionCleanupTests(unittest.TestCase):
         if not collection or not collection.startswith("repository_chunks__"):
             self.skipTest("Session collection not in standard format for this test")
 
-        with patch("retrieval.session_indexer.QdrantClient") as mock_qdrant:
+        with patch("retrieval.session_indexer.create_qdrant_client") as mock_create_qdrant:
             mock_client = MagicMock()
             mock_client.delete_collection.side_effect = Exception("Connection refused")
-            mock_qdrant.return_value = mock_client
+            mock_create_qdrant.return_value = mock_client
 
             result = session_indexer.delete_session(session_id)
 
@@ -295,8 +336,8 @@ class SessionCleanupTests(unittest.TestCase):
         with mock.patch(
             "retrieval.api_service._require_auth_user",
             return_value={"id": self.user_id, "email": "u@t.com"},
-        ), patch("retrieval.session_indexer.QdrantClient") as mock_qdrant:
-            mock_qdrant.return_value = MagicMock()
+        ), patch("retrieval.session_indexer.create_qdrant_client") as mock_create_qdrant:
+            mock_create_qdrant.return_value = MagicMock()
             client = TestClient(api_service.app, raise_server_exceptions=True)
             resp = client.delete(f"/api/v1/sessions/{session_id}")
 

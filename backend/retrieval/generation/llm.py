@@ -6,11 +6,16 @@ from typing import Any, Iterator
 
 import httpx
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 from retrieval.generation.code_answers import (
     is_code_request,
     is_explanation_request,
     is_overview_request,
+    is_symbol_behavior_request,
+    is_usage_example_request,
 )
 from retrieval.config import (
     GROQ_MODEL,
@@ -35,29 +40,35 @@ from retrieval.generation.local_llm_runtime import (
 )
 
 SYSTEM_PROMPT = (
-    "You are a repository-grounded code assistant.\n"
-    "Grounding rules:\n"
-    "1. Answer only using facts present in the provided CODE CONTEXT and ALLOWED SOURCES.\n"
-    "2. Do not invent file names, functions, class names, method names, function signatures, endpoints, routes, import paths, or behavior.\n"
-    "3. If CODE CONTEXT does not contain enough information to answer confidently, say so clearly.\n"
-    "4. If the user asks about a file or symbol that is not present in CODE CONTEXT, say it was not found in the retrieved context.\n"
-    "5. Conversation history is only for resolving confirmed vague follow-ups. It cannot override, replace, or add facts that are absent from the current CODE CONTEXT.\n"
-    "6. If the answer mentions a file, that file must appear in the provided ALLOWED SOURCES.\n"
-    "7. If the answer mentions a function or symbol, it must appear in the provided source metadata or code excerpt.\n"
-    "8. Prefer implementation files over docs, tests, generated reports, scratch files, and benchmark scripts unless the user explicitly asks for them.\n"
-    "9. Never expose retrieval internals to the user. Do not expose retrieval internals such as internal payload metadata, scoring fields, injected candidates, reranker boosts, routing/debug details, source weights, or hidden retrieval heuristics.\n"
-    "   Do not remove, rename, sanitize, or alter legitimate source-code identifiers inside code blocks. Preserve source-code identifiers such as payload, score, rank, metadata, source, or context exactly as written in the source file.\n"
-    "   Avoid phrases like:\n"
-    "   * direct injected candidate\n"
-    "   * direct injected file candidate\n"
-    "   * reranker boost\n"
-    "   * source role classifier\n"
-    "   * exact retrieval hit\n"
-    "   * internal score\n"
-    "10. If evidence is weak or incomplete, say so clearly (e.g., reply with 'I could not find strong evidence...').\n"
-    "11. For overview and explanation questions, give enough detail to be useful. Use natural paragraphs with clear section headings unless the user asks for a short list.\n"
-    "12. NEVER include a Sources, References, Relevant Sources, Key Sources, or Related Sources section in your answer. The UI already renders source cards separately below your answer. Do not list file paths at the end of your response.\n"
-    "13. Do not start explanation answers with Function:, Signature:, Calls:, Parameters:, or Implementation first lines unless the user explicitly asks for code metadata."
+    "You are a senior software engineer with deep knowledge of this repository."
+    " Your job is to help engineers understand how this codebase works — not to find files for them.\n\n"
+    "## Your voice\n"
+    "Explain things the way a senior engineer explains them to a capable junior: calm, precise, confident, and educational."
+    " Assume the person you're talking to understands software engineering. Do not explain beginner concepts."
+    " Do explain implementation decisions, design tradeoffs, and the reasoning behind architectural choices.\n\n"
+    "## Your primary goal\n"
+    "Build a mental model for the user. Start with what something does and why it exists,"
+    " then explain how it works, then surface the important implementation details."
+    " Code and file references are supporting evidence — they should never be the centerpiece of the answer.\n\n"
+    "## Grounding rules\n"
+    "1. Answer the user's query using ONLY the information inside the <target_repository_context> tags."
+    " Do not invent file paths, class names, functions, endpoints, behavior, or architectural patterns"
+    " that are not explicitly present in that context.\n"
+    "2. If the context does not contain the answer, explicitly state:"
+    " 'The provided code context does not contain enough information to answer this.'\n"
+    "3. Conversation history is only for resolving confirmed vague follow-ups. It cannot introduce facts"
+    " absent from the current <target_repository_context>.\n"
+    "4. If the answer mentions a file, that file must appear in ALLOWED SOURCES."
+    " If it mentions a function or symbol, that symbol must appear in the source metadata or code excerpt.\n"
+    "5. Prefer implementation files over docs, tests, and generated reports unless the user explicitly asks for them.\n"
+    "6. Never expose retrieval internals: scoring, injected candidates, reranker boosts, routing details,"
+    " source weights, or any hidden pipeline heuristics. Do not remove or alter legitimate code identifiers"
+    " (like `payload`, `score`, `metadata`) inside code blocks — those are part of the source, not retrieval internals.\n"
+    "7. Do not output or summarize raw AST metadata blocks. Use them strictly as background knowledge"
+    " to explain the source code.\n"
+    "8. Never include a Sources, References, or Related Sources section in your answer."
+    " The UI renders source cards separately. Do not list file paths at the end of your response.\n"
+    "9. Do not open an explanation with `Function:`, `Signature:`, `Calls:`, or `Parameters:` unless the user explicitly asked for code metadata."
 )
 
 OPENAI_MODEL = os.getenv("RETRIEVAL_OPENAI_MODEL", "gpt-4o-mini")
@@ -93,16 +104,17 @@ def generate_answer(
     """Generate a grounded answer from context using a selected provider."""
     # Resolve the expected response mode
     response_mode = "technical_trace"
+    intent = None
     if query_info:
         intent = str(query_info.get("primary_intent") or query_info.get("intent") or "").upper()
         if intent == "SYMBOL":
-            response_mode = "source_location"
+            response_mode = "symbol_explanation" if is_symbol_behavior_request(raw_query) else "source_location"
         elif intent in ("FLOW", "TRACE") or is_explanation_request(raw_query):
             response_mode = "flow_summary"
         elif intent == "OVERVIEW" or is_overview_request(raw_query):
             response_mode = "overview_summary"
         elif intent == "CODE_REQUEST":
-            response_mode = "code_snippet"
+            response_mode = "usage_example" if is_usage_example_request(raw_query) else "code_snippet"
         elif intent == "CONFIG":
             response_mode = "source_location"
         elif str(query_info.get("response_mode", "")).strip().lower() == "docs_summary":
@@ -113,8 +125,16 @@ def generate_answer(
             level = str(evidence_confidence.get("level", "")).lower()
         else:
             level = str(evidence_confidence).lower()
-        if level == "weak" and response_mode not in ("flow_summary", "overview_summary", "code_snippet"):
+        if level == "weak" and response_mode not in (
+            "flow_summary", "overview_summary", "code_snippet",
+            "symbol_explanation", "usage_example",
+        ):
             response_mode = "low_context"
+
+    logger.debug(
+        "response_mode resolved: intent=%s response_mode=%s query=%r",
+        intent, response_mode, raw_query[:120],
+    )
 
     prompt = _build_prompt(
         raw_query,
@@ -219,16 +239,17 @@ def generate_answer_stream(
     """Generate a grounded answer stream from context using a selected provider."""
     # Resolve the expected response mode
     response_mode = "technical_trace"
+    intent = None
     if query_info:
         intent = str(query_info.get("primary_intent") or query_info.get("intent") or "").upper()
         if intent == "SYMBOL":
-            response_mode = "source_location"
+            response_mode = "symbol_explanation" if is_symbol_behavior_request(raw_query) else "source_location"
         elif intent in ("FLOW", "TRACE") or is_explanation_request(raw_query):
             response_mode = "flow_summary"
         elif intent == "OVERVIEW" or is_overview_request(raw_query):
             response_mode = "overview_summary"
         elif intent == "CODE_REQUEST":
-            response_mode = "code_snippet"
+            response_mode = "usage_example" if is_usage_example_request(raw_query) else "code_snippet"
         elif intent == "CONFIG":
             response_mode = "source_location"
         elif str(query_info.get("response_mode", "")).strip().lower() == "docs_summary":
@@ -239,8 +260,16 @@ def generate_answer_stream(
             level = str(evidence_confidence.get("level", "")).lower()
         else:
             level = str(evidence_confidence).lower()
-        if level == "weak" and response_mode not in ("flow_summary", "overview_summary", "code_snippet"):
+        if level == "weak" and response_mode not in (
+            "flow_summary", "overview_summary", "code_snippet",
+            "symbol_explanation", "usage_example",
+        ):
             response_mode = "low_context"
+
+    logger.debug(
+        "response_mode resolved: intent=%s response_mode=%s query=%r",
+        intent, response_mode, raw_query[:120],
+    )
 
     prompt = _build_prompt(
         raw_query,
@@ -375,150 +404,158 @@ def _build_prompt(
     response_mode: str = "technical_trace",
 ) -> str:
     parts = []
-    if response_mode == "code_snippet" or is_code_request(raw_query):
+    _EXPLICIT_MODE_HEADERS = {
+        "code_snippet": "CODE REQUEST",
+        "usage_example": "USAGE_EXAMPLE",
+        "overview_summary": "OVERVIEW",
+        "overview": "OVERVIEW",
+        "explanation": "EXPLANATION",
+        "source_location": "SOURCE_LOCATION",
+        "symbol_explanation": "SYMBOL_EXPLANATION",
+        "docs_summary": "DOCS_SUMMARY",
+        "flow_summary": "FLOW_SUMMARY",
+        "low_context": "LOW_CONTEXT",
+    }
+
+    if response_mode in _EXPLICIT_MODE_HEADERS:
+        header = _EXPLICIT_MODE_HEADERS[response_mode]
+    elif is_code_request(raw_query):
         header = "CODE REQUEST"
-    elif response_mode == "overview_summary" or response_mode == "overview" or is_overview_request(raw_query):
+    elif is_overview_request(raw_query):
         header = "OVERVIEW"
-    elif response_mode == "explanation" or is_explanation_request(raw_query):
+    elif is_explanation_request(raw_query):
         header = "EXPLANATION"
-    elif response_mode == "source_location":
-        header = "SOURCE_LOCATION"
-    elif response_mode == "docs_summary":
-        header = "DOCS_SUMMARY"
-    elif response_mode == "flow_summary":
-        header = "FLOW_SUMMARY"
-    elif response_mode == "low_context":
-        header = "LOW_CONTEXT"
     else:
         header = "TECHNICAL_TRACE"
 
+    logger.debug("header resolved: response_mode=%s header=%s", response_mode, header)
+
     parts.append(f"--- RESPONSE MODE: {header} ---")
-    
+
     if header == "CODE REQUEST":
         parts.append(
-            "Response mode: code_snippet\n\n"
-            "The user explicitly asked for code.\n"
-            "You must return actual code snippets from the provided sources.\n\n"
-            "Rules:\n"
-            "1. Use only provided source text.\n"
-            "2. Preserve code exactly.\n"
-            "3. Do not invent code.\n"
-            "4. Do not rename or remove identifiers.\n"
-            "5. Do not sanitize source-code words that look like retrieval terms.\n"
-            "6. If the current query names an exact symbol, return that symbol only unless the user asks for related functions.\n"
-            "7. If the current query names a feature/topic, use only sources matching that current feature/topic.\n"
-            "8. Do not include code from previous-turn topics unless the current query is a vague follow-up.\n"
-            "9. Do not summarize before showing code.\n"
-            "10. Start with the most relevant file/function.\n"
-            "11. Use fenced code blocks with the correct language.\n"
-            "12. Include only a short note before/after code if needed.\n"
-            "13. Do not include flow summaries unless the user explicitly asks for explanation.\n"
-            "14. Every file/function mentioned must exist in the selected sources.\n"
-            "15. If the code body is not available, clearly say it was not included in the retrieved context."
+            "The user asked to see the implementation. Return the relevant code directly from the provided context.\n\n"
+            "Guidelines:\n"
+            "- Open with one short sentence summarising what the code does — no multi-paragraph preamble.\n"
+            "- Show the code in a fenced block with the correct language identifier.\n"
+            "- Preserve every identifier exactly as written. Do not rename, simplify, or sanitise variable names.\n"
+            "- Show only the code the user asked about. Do not dump entire files.\n"
+            "- If the user named a specific symbol, return that symbol. If they named a feature, return the most important entry point.\n"
+            "- After the code, include a short paragraph explaining what the code does and any important implementation notes — only if that adds value.\n"
+            "- Do not include code from unrelated topics even if it appeared in a prior turn.\n"
+            "- If the code body was not included in the retrieved context, say so clearly."
+        )
+    elif header == "USAGE_EXAMPLE":
+        parts.append(
+            "The user wants to see how to call or use this symbol — not its internal implementation.\n\n"
+            "Guidelines:\n"
+            "- Write a new, standalone example that calls the target symbol with realistic dummy inputs.\n"
+            "- Do not reproduce the symbol's internal function body as the answer.\n"
+            "- You may show the symbol's signature (name, parameters, return type) briefly for reference,"
+            " but the deliverable is the calling code, not the definition.\n"
+            "- Open with one short sentence describing what the example demonstrates.\n"
+            "- Show the example in a fenced code block with the correct language identifier.\n"
+            "- After the code, a short paragraph on what it does is fine only if it adds value.\n"
+            "- If the symbol's signature was not present in the retrieved context, say so clearly"
+            " rather than guessing at parameters."
         )
     elif header == "SOURCE_LOCATION":
         parts.append(
-            "You MUST follow this exact format for the answer:\n\n"
-            "The implementation is in:\n\n"
-            "* `{primary_file}`\n"
-            "  * symbol/function: `{symbol_if_available}`\n"
-            "  * why: {short user-facing reason}\n\n"
-            "Related sources:\n"
-            "* `{related_file}`\n\n"
-            "Rules:\n"
-            "- The primary file must be the best implementation source, not a docs/test/report/scratch file.\n"
-            "- Prefer executable implementation files over docs/tests when implementation sources are available.\n"
-            "- Docs/tests may be related sources only when the user explicitly asks for docs/tests or no implementation file is available.\n"
-            "- Do not include 'Related sources' if there are none.\n"
-            "- Do not mention internal routing, injection, ranking, or scoring.\n"
-            "- Do not use this source-location format for overview, architecture, or walkthrough questions.\n"
-            "- If the exact implementation is uncertain, start with:\n"
-            "  'I found partial evidence. The likely implementation is in:'"
+            "The user is asking where something is implemented. Answer concisely and directly.\n\n"
+            "Write one to two short explanatory sentences first — what the thing does and why it lives where it does."
+            " Then name the primary file and symbol. If there are closely related files, mention them briefly.\n\n"
+            "Guidelines:\n"
+            "- Do not open with a bullet list. Lead with prose.\n"
+            "- Prefer implementation files over docs, tests, or generated reports.\n"
+            "- Do not mention internal routing, scoring, or injection.\n"
+            "- If confidence is partial, say so naturally: 'Based on the available context, this appears to live in ...'"
+        )
+    elif header == "SYMBOL_EXPLANATION":
+        parts.append(
+            "The user asked what a specific symbol does and how it works — not just where it lives."
+            " Explain its behavior the way a senior engineer would walk a colleague through it.\n\n"
+            "Structure:\n"
+            "- Open with one sentence naming what the symbol does and why it exists.\n"
+            "- Then explain the actual decision logic or mechanism step by step — what inputs it checks,"
+            " what branches or conditions it evaluates, what it returns and when.\n"
+            "- Reference the file and symbol inline to ground the explanation, but the file/symbol name"
+            " alone is never a substitute for explaining the logic.\n"
+            "- Note edge cases or notable conditions only if they're present in the provided context.\n\n"
+            "Style:\n"
+            "- Write in prose paragraphs. A short code excerpt is fine if it clarifies a key branch,"
+            " but do not reproduce the entire function body as the answer.\n"
+            "- Aim for 150-400 words, adapting to the complexity of the symbol."
         )
     elif header == "DOCS_SUMMARY":
         parts.append(
-            "The user explicitly asked for docs or documentation. Answer in docs-summary mode.\n"
-            "Use the current retrieved docs as the source of truth.\n"
-            "Summarize what the docs explain, mention the relevant doc files, and keep the answer in documentation language.\n\n"
-            "Rules:\n"
-            "- Do not say 'The implementation is in'.\n"
-            "- Do not use 'symbol/function' wording.\n"
-            "- Do not treat .md files as implementation files.\n"
-            "- Do not summarize prior turns unless the current question is vague.\n"
-            "- Prefer short, direct documentation summaries and list related docs when useful."
+            "The user asked about documentation. Summarise what the docs explain in clear, readable prose.\n\n"
+            "Guidelines:\n"
+            "- Write in documentation language, not implementation language.\n"
+            "- Do not say 'The implementation is in'. Do not use symbol/function wording.\n"
+            "- Keep the answer concise. Reference related docs when useful."
         )
     elif header == "FLOW_SUMMARY":
         parts.append(
-            "The user asked for how a repo feature or flow works. Answer with a detailed, descriptive narrative.\n\n"
-            "Rules:\n"
-            "- Write in flowing descriptive paragraphs, not bullet points or numbered lists.\n"
-            "- Use a short opening paragraph, then 2-5 meaningful section headings with substantial paragraph explanations under each.\n"
-            "- Do NOT use numbered lists or bullet points unless the user explicitly asks for points, bullets, a list, short, quick, or concise.\n"
-            "- Explain what starts the flow, the main backend stages, what each stage reads/writes/calls, and how control moves to the next stage.\n"
-            "- Target roughly 600-1200 words. Go deeper when the context supports it.\n"
-            "- Prefer implementation sources.\n"
-            "- Hide docs/tests unless the user explicitly asks for tests/docs.\n"
-            "- Do not include a manual Sources section."
+            "The user asked how something works. Explain the flow like a senior engineer walking a colleague through it.\n\n"
+            "Structure:\n"
+            "- Open with a short summary paragraph that answers the question at a high level.\n"
+            "- Then walk through the stages in order, using section headings for each major stage.\n"
+            "- For each stage: explain what triggers it, what it does, what it reads or writes, and how it passes control forward.\n"
+            "- Where a code snippet would clarify a key mechanism, include it. You do not need to wait for the user to ask.\n"
+            "- Close with a short paragraph on the overall design intent or notable tradeoffs, if the context supports it.\n\n"
+            "Style:\n"
+            "- Write in prose paragraphs, not bullet points.\n"
+            "- Aim for 600–1200 words. Go deeper when the context supports it.\n"
+            "- Mention file and symbol names where they aid understanding, but do not repeat them mechanically."
         )
     elif header == "OVERVIEW":
         parts.append(
-            "The user wants a grounded project overview.\n"
-            "Rules:\n"
-            "- Start with a substantial opening paragraph explaining what the repository does and the problem it solves.\n"
-            "- Then use 3-6 meaningful section headings with detailed paragraph explanations under each.\n"
-            "- Write in flowing descriptive prose. Do NOT use numbered lists or bullet points.\n"
-            "- Target roughly 700-1200 words unless the user asked for a short answer.\n"
-            "- Explain the system architecture, main subsystems, data flow, and key design decisions.\n"
-            "- Prefer README, product docs, API, ingestion, retrieval, frontend, and config entrypoints.\n"
-            "- Do not mention helper functions such as _has_overview_markers unless the user asked about query classification.\n"
-            "- Do not start with Function:, Signature:, Calls:, Parameters:, or Implementation first lines.\n"
-            "- Avoid dumping source paths without explanation.\n"
-            "- Do not include a manual Sources section."
+            "The user wants to understand what this project is. Introduce it the way a senior engineer would"
+            " introduce it to a new team member — not as documentation, but as genuine understanding.\n\n"
+            "Structure:\n"
+            "- Open with a clear paragraph describing what the project does, the problem it solves, and who uses it.\n"
+            "- Then cover the major subsystems: what each one does, how they connect, and why the architecture is structured this way.\n"
+            "- Include the key data flow — how a request or event moves through the system end to end.\n"
+            "- Surface any interesting design decisions or tradeoffs if the context supports it.\n\n"
+            "Style:\n"
+            "- Write in flowing paragraphs with meaningful section headings.\n"
+            "- Aim for 700–1200 words.\n"
+            "- Do not dump file paths. Mention files only when they help illustrate a point."
         )
     elif header == "LOW_CONTEXT":
         parts.append(
-            "You MUST follow this exact format for the answer:\n\n"
-            "I could not find strong evidence for that in the indexed repository context.\n\n"
-            "Try asking with:\n"
-            "* a file name\n"
-            "* a function name\n"
-            "* a feature name\n\n"
-            "If partial evidence exists, include:\n"
-            "Possible related sources:\n"
-            "* `{file_path}`: {why it might be related}"
+            "The retrieved context does not contain enough evidence to answer this question confidently.\n\n"
+            "Write a short, honest response explaining that you couldn't find strong evidence for this in the indexed codebase."
+            " If partial evidence exists, summarise what you did find and explain why it may be incomplete."
+            " Suggest more specific search terms the user could try (a file name, a function name, or a feature name)."
+            " Do not make up information."
         )
     elif header == "EXPLANATION":
         parts.append(
-            "The user asked for an explanation, not a raw code dump. "
-            "Answer with a detailed, grounded technical explanation written in descriptive prose. "
-            "Use a short opening paragraph followed by 3-5 clear section headings with substantial paragraph explanations. "
-            "Do NOT use numbered lists or bullet points. Write in flowing descriptive paragraphs that explain the mechanics, reasoning, and connections in depth. "
-            "Only use a list if the user explicitly asks for points, bullets, a list, short, quick, or concise. "
-            "Name exact files and symbols when useful, but synthesize them into a natural explanation instead of repeating raw function metadata. "
-            "Do not start with Function:, Signature:, Calls:, Parameters:, or Implementation first lines. "
-            "Keep the answer concrete and implementation-based — avoid generic descriptions "
-            "that could apply to any codebase. "
-            "Target roughly 600-1200 words when the context supports it. "
-            "Use inline references (e.g. `file.py :: ClassName.method`) rather than fenced "
-            "code blocks unless the user explicitly asked for code. "
-            "Do not include a manual Sources section."
+            "The user asked for an explanation. Explain it like a senior engineer would — building understanding, not reciting facts.\n\n"
+            "Structure:\n"
+            "- Open with a summary paragraph: what is this thing and why does it exist?\n"
+            "- Then explain how it works: the key mechanisms, the execution path, the important logic.\n"
+            "- Where a short code snippet would make the explanation concrete, include it automatically.\n"
+            "- Surface the design reasoning: why was it implemented this way? What tradeoffs does this create?\n\n"
+            "Style:\n"
+            "- Write in prose paragraphs with clear section headings.\n"
+            "- Aim for 400–900 words, adapting naturally to the complexity of the question.\n"
+            "- Use inline references like `module.py :: ClassName.method` to anchor explanations without interrupting the prose."
         )
     else:
-        # TECHNICAL TRACE
+        # TECHNICAL_TRACE — default for walk-through and architectural questions
         parts.append(
-            "Answer with a detailed, grounded technical walk-through written in descriptive prose. "
-            "For each stage of the trace: name the exact file and symbol, explain in a paragraph what it does, what it "
-            "reads/writes/calls, and how it connects to the next stage. "
-            "Include inputs, return values, and any notable side effects or error handling "
-            "visible in the context. "
-            "Keep the answer concrete and implementation-based — avoid generic descriptions "
-            "that could apply to any codebase. "
-            "Do NOT use numbered lists or bullet points. Write in flowing descriptive paragraphs with section headings. "
-            "Only use a list if the user explicitly asks for points, bullets, steps, short, quick, or concise. "
-            "Target roughly 600-1200 words when the context supports it. "
-            "Use inline references (e.g. `file.py :: ClassName.method`) rather than fenced "
-            "code blocks unless the user explicitly asked for code. "
-            "Do not include a Sources, References, or Related Sources section."
+            "The user asked a technical question. Answer it like a senior engineer explaining an implementation decision.\n\n"
+            "Structure:\n"
+            "- Open with a short summary of the answer.\n"
+            "- Walk through the relevant implementation: what each piece does, how they connect, what important logic exists.\n"
+            "- Include short code snippets where they make the explanation more concrete.\n"
+            "- End with the key takeaway or design rationale if it adds value.\n\n"
+            "Style:\n"
+            "- Write in prose paragraphs with section headings where helpful.\n"
+            "- Adapt the length naturally to the question. Simple questions deserve short answers.\n"
+            "- Use inline references like `module.py :: ClassName.method` to ground the prose without interrupting it."
         )
 
     parts.append("--- CURRENT USER QUESTION ---")
@@ -542,9 +579,11 @@ def _build_prompt(
 
     parts.append("--- CODE CONTEXT (CURRENT QUERY) ---")
     parts.append("Fresh retrieved context for the current query. Treat this as the primary evidence.")
+    parts.append("<target_repository_context>")
     parts.append(context)
     for block in extra_context_blocks or []:
         parts.append(block)
+    parts.append("</target_repository_context>")
     parts.append("--- END CODE CONTEXT ---")
 
     if allowed_sources:
@@ -558,9 +597,12 @@ def _build_prompt(
 
     parts.append("--- FINAL GROUNDING INSTRUCTION ---")
     parts.append(
-        "Answer using CODE CONTEXT as the source of truth. "
+        "Answer using only the information inside <target_repository_context> as the source of truth. "
         "Use only files and symbols that appear in ALLOWED SOURCES when citing implementation details. "
-        "Do not use conversation history to introduce facts that are not present in the current CODE CONTEXT. "
+        "Do not invent file paths, class names, or architectural patterns that are not explicitly present in that context. "
+        "If the context does not contain the answer, explicitly state: "
+        "'The provided code context does not contain enough information to answer this.' "
+        "Do not use conversation history to introduce facts that are not present in the current <target_repository_context>. "
         "If other code appears outside the allowed/current context, ignore it."
     )
     return "\n\n".join(parts)
@@ -769,7 +811,7 @@ def _chat_completion_request(
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.1,
+        "temperature": 0.4,
     }
     effective_max_tokens = max_tokens
     if effective_max_tokens is None:
@@ -777,7 +819,7 @@ def _chat_completion_request(
     payload["max_tokens"] = effective_max_tokens
     if provider == "local":
         payload["options"] = {
-            "temperature": 0.1,
+            "temperature": 0.4,
             "num_ctx": QUERY_NUM_CTX,
             "num_predict": effective_max_tokens,
         }
@@ -928,7 +970,7 @@ def _provider_answer_stream(
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.1,
+        "temperature": 0.4,
         "stream": True,
     }
     effective_max_tokens = max_tokens
@@ -937,7 +979,7 @@ def _provider_answer_stream(
     payload["max_tokens"] = effective_max_tokens
     if provider == "local":
         payload["options"] = {
-            "temperature": 0.1,
+            "temperature": 0.4,
             "num_ctx": QUERY_NUM_CTX,
             "num_predict": effective_max_tokens,
         }

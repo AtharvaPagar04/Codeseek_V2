@@ -13,6 +13,11 @@ def _http_status_error(status_code: int) -> httpx.HTTPStatusError:
 
 
 class LlmProviderFailureTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from retrieval.generation import llm
+        llm._llm_failures = 0
+        llm._llm_circuit_open_until = 0.0
+
     def test_invalid_provider_key_raises_structured_error(self) -> None:
         with patch(
             "retrieval.generation.llm._chat_completion_request",

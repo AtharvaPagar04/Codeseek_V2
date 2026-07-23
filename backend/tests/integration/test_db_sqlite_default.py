@@ -87,7 +87,7 @@ class DbSqliteDefaultTests(unittest.TestCase):
 
     def test_inspector_sqlite_session_lookup(self):
         import sys
-        sys.path.append(str(Path(__file__).resolve().parents[2]))
+        sys.path.append(str(Path(__file__).resolve().parents[3]))
         from scripts.inspect_chunk_metadata import fetch_session
         import sqlite3
         with TemporaryDirectory() as tmpdir:

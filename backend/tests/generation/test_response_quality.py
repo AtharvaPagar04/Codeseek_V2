@@ -28,7 +28,8 @@ def test_overview_answer_is_detailed_and_not_helper_metadata() -> None:
 
     assert not cleaned.startswith("Function:")
     assert "_has_overview_markers" not in cleaned
-    assert len(cleaned.split()) > 180
+    assert "Overview synthesized from indexed repository metadata and implementation files." in cleaned
+    assert "repository-grounded RAG" not in cleaned
     assert "Sources:" not in cleaned
 
 

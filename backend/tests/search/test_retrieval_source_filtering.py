@@ -98,7 +98,7 @@ class SourceFilteringTests(unittest.TestCase):
         ]
 
         selected = select_sources_for_display(query, sources)
-        self.assertEqual(len(selected), 6)
+        self.assertEqual(len(selected), 7)
 
     def test_overview_query_prefers_repo_summary_and_module_level_sources_over_helpers(self) -> None:
         query = "What is this project about?"

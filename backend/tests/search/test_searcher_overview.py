@@ -20,10 +20,39 @@ class SearcherOverviewTests(unittest.TestCase):
             side_effect=lambda: os.getenv("RETRIEVAL_REPO_ROOT", "/dummy_nonexistent_path")
         )
         self._repo_root_patcher.start()
+        self._comp_targeting_patcher = patch(
+            "retrieval.query.semantic_targeting.detect_component_semantic_targets",
+            return_value={"enabled": False}
+        )
+        self._comp_targeting_patcher.start()
+        self._exact_val_patcher = patch(
+            "retrieval.generation.exact_value_grounding.detect_exact_value_query",
+            return_value={"enabled": False}
+        )
+        self._exact_val_patcher.start()
+        from retrieval.support.repo_profile import RepoProfile
+        self._get_repo_profile_patcher = patch(
+            "retrieval.support.repo_profile.get_repo_profile",
+            return_value=RepoProfile([])
+        )
+        self._get_repo_profile_patcher.start()
+        self._structural_hints_patcher = patch(
+            "retrieval.search.searcher._inject_structural_hint_candidates",
+            side_effect=lambda raw_query, candidates, query_info=None: candidates
+        )
+        self._structural_hints_patcher.start()
+
+        from retrieval.search import searcher as s_mod
+        s_mod._qdrant_failures = 0
+        s_mod._qdrant_circuit_open_until = 0.0
 
     def tearDown(self) -> None:
         self._lexical_patcher.stop()
         self._repo_root_patcher.stop()
+        self._comp_targeting_patcher.stop()
+        self._exact_val_patcher.stop()
+        self._get_repo_profile_patcher.stop()
+        self._structural_hints_patcher.stop()
         if self.original_repo_root is not None:
             os.environ["RETRIEVAL_REPO_ROOT"] = self.original_repo_root
         elif "RETRIEVAL_REPO_ROOT" in os.environ:
@@ -433,10 +462,16 @@ class SearcherOverviewTests(unittest.TestCase):
         with patch("retrieval.search.searcher._get_client") as get_client:
             get_client.return_value.scroll.side_effect = [
                 ([repo_summary_hit], None),
-                ([noisy_state, noisy_fixture, noisy_docs, backend_readme, backend_main], None),
+                ([backend_readme], None),
+                ([noisy_state, noisy_fixture, noisy_docs, backend_main], None),
             ]
             candidates = _inject_overview_candidates([])
 
+        readme_filter = get_client.return_value.scroll.call_args_list[1].kwargs["scroll_filter"]
+        self.assertEqual(
+            {condition.key for condition in readme_filter.should},
+            {"relative_path", "filename", "file_type"},
+        )
         paths = [item["relative_path"] for item in candidates]
         self.assertIn("__repo_summary__.md", paths)
         self.assertIn("backend/README.md", paths)

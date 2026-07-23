@@ -14,6 +14,10 @@ from retrieval.search.searcher import search
 
 
 class RetrievalTargetingHardeningTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from retrieval.search import searcher
+        searcher._qdrant_failures = 0
+        searcher._qdrant_circuit_open_until = 0.0
     def test_normalize_repo_path_handles_relative_absolute_and_windows_forms(self) -> None:
         repo_root = "/home/arch/DEV/Portfolio"
         self.assertEqual(
