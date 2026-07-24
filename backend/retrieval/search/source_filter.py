@@ -14,6 +14,7 @@ When RETRIEVAL_ENABLE_TWO_LAYER_SOURCES=0 (or the flag is absent and disabled),
 both lists collapse to the same single-list behaviour as before.
 """
 
+
 from __future__ import annotations
 
 import re
