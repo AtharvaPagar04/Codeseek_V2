@@ -11,6 +11,11 @@ CodeSeek is a repository-grounded code assistant. It clones a GitHub repository,
 
 ## End-to-End System Architecture & Workflow Diagram
 
+![CodeSeek V2 End-to-End System Architecture](docs/assets/codeseek_v2_architecture.jpg)
+
+<details>
+<summary>Click to view interactive Mermaid diagram source</summary>
+
 ```mermaid
 flowchart TD
     subgraph Client["Frontend Interface (React / Vite)"]
@@ -84,6 +89,7 @@ flowchart TD
     Ingestion -->|"Real-time SSE Status"| LogUI
     RelationalDB -->|"Node / Edge Topology API"| GraphUI
 ```
+</details>
 
 ---
 
