@@ -26,8 +26,8 @@ flowchart TD
         Filter --> AST["Tree-sitter AST Parsing (Python, JS, TS, JSX, TSX)"]
         AST --> Chunking["Structural Semantic Chunking"]
         Chunking --> Overflow{"Exceeds 2048 Tokens?"}
-        Overflow -- "Yes" --> SlidingWindow["Sliding Window Overflow Handler (100 Lines, 20 Line Overlap)"]
-        Overflow -- "No" --> Summarization["Multi-Level Summarization (Chunk, File, Architecture)"]
+        Overflow -->|"Yes"| SlidingWindow["Sliding Window Overflow Handler (100 Lines, 20 Line Overlap)"]
+        Overflow -->|"No"| Summarization["Multi-Level Summarization (Chunk, File, Architecture)"]
         SlidingWindow --> Summarization
         Summarization --> Embeddings["Dense Embedding Generation (SentenceTransformers / BGE)"]
         Embeddings --> QdrantDB[("Qdrant Vector Database")]
@@ -67,12 +67,12 @@ flowchart TD
     subgraph Generation["3. Dual-Path Answer Generation & Safeguards"]
         SourceTruth --> IntentRouter{"Query Intent Destination"}
         
-        IntentRouter -- "Structural Inquiry" --> Builders["Deterministic Builder Suite (File Summary, Snippet, Architecture, Flow)"]
+        IntentRouter -->|"Structural Inquiry"| Builders["Deterministic Builder Suite (File Summary, Snippet, Architecture, Flow)"]
         Builders --> TruthCheck{"Truthiness Validation Check"}
-        TruthCheck -- "Valid Code Evidence" --> ExactGrounding["Exact Value Grounding & Post-Validation"]
-        TruthCheck -- "Empty / Whitespace" --> DynamicFallback["Dynamic Fallback Circuit Breaker"]
+        TruthCheck -->|"Valid Code Evidence"| ExactGrounding["Exact Value Grounding & Post-Validation"]
+        TruthCheck -->|"Empty / Whitespace"| DynamicFallback["Dynamic Fallback Circuit Breaker"]
         
-        IntentRouter -- "Conceptual Reasoning" --> DynamicFallback
+        IntentRouter -->|"Conceptual Reasoning"| DynamicFallback
         DynamicFallback --> LLMPath["LLM Generation Engine (OpenAI, Anthropic, Ollama, Local)"]
         LLMPath --> ExactGrounding
         
@@ -81,8 +81,8 @@ flowchart TD
 
     FinalResponse --> UI
     FinalResponse --> CardUI
-    LogUI <-- "Real-time SSE Status" -- Ingestion
-    GraphUI <-- "Node / Edge Topology API" -- RelationalDB
+    Ingestion -->|"Real-time SSE Status"| LogUI
+    RelationalDB -->|"Node / Edge Topology API"| GraphUI
 ```
 
 ---
