@@ -18,7 +18,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1378,
             "end_line": 1435,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
             "retrieval_score": 0.22,
             "chunk_type": "function",
         }
@@ -80,7 +80,8 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 10,
             "end_line": 20,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
+            "retrieval_score": 0.8,
         }
         chunk = dict(source)
         chunk["chunk_id"] = "storage-1"
@@ -132,7 +133,8 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 5,
             "end_line": 15,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
+            "retrieval_score": 0.9,
         }
         chunk = dict(source)
         chunk["chunk_id"] = "api-1"
@@ -182,7 +184,8 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1,
             "end_line": 50,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
+            "retrieval_score": 0.8,
         }
         chunk = dict(source)
         chunk["chunk_id"] = "config-1"
@@ -290,7 +293,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1,
             "end_line": 40,
             "expansion_type": "primary",
-            "labels": ["question_use:repo-overview"],
+            "semantic_labels": ["repo-overview"],
             "content": "Safe eval docs describe the runner, cooldowns, and report generation.",
         }
         policy_source = {
@@ -299,7 +302,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1,
             "end_line": 40,
             "expansion_type": "primary",
-            "labels": ["question_use:repo-overview"],
+            "semantic_labels": ["repo-overview"],
             "content": "Evaluation policy docs describe gating rules and confidence handling.",
         }
         impl_source = {
@@ -308,7 +311,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1,
             "end_line": 80,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
             "content": "def main():\n    pass",
         }
         report_api_source = {
@@ -317,7 +320,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1,
             "end_line": 40,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
             "content": "def get_index_preview_v1():\n    pass",
         }
         report_loader_source = {
@@ -326,7 +329,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1,
             "end_line": 40,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
             "content": "def get_index_preview():\n    pass",
         }
 
@@ -530,7 +533,8 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 "start_line": 1,
                 "end_line": 40,
                 "expansion_type": "primary",
-                "labels": ["question_use:code-location"],
+                "semantic_labels": ["source-location"],
+                "retrieval_score": 0.9,
                 "retrieval_score": 0.82,
             },
             {
@@ -539,7 +543,8 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 "start_line": 620,
                 "end_line": 680,
                 "expansion_type": "primary",
-                "labels": ["question_use:code-location"],
+                "semantic_labels": ["source-location"],
+                "retrieval_score": 0.9,
                 "retrieval_score": 0.90,
             },
             {
@@ -548,7 +553,8 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 "start_line": 1,
                 "end_line": 80,
                 "expansion_type": "primary",
-                "labels": ["question_use:code-location"],
+                "semantic_labels": ["source-location"],
+                "retrieval_score": 0.9,
                 "retrieval_score": 0.89,
             },
         ]
@@ -601,7 +607,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1,
             "end_line": 120,
             "expansion_type": "primary",
-            "labels": ["question_use:repo-overview"],
+            "semantic_labels": ["repo-overview"],
             "content": "The retrieval pipeline docs describe query processing, search, context assembly, answer generation, and validation.",
         }
         architecture_source = {
@@ -610,7 +616,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1,
             "end_line": 120,
             "expansion_type": "primary",
-            "labels": ["question_use:repo-overview"],
+            "semantic_labels": ["repo-overview"],
             "content": "The current retrieval strategy describes the module layout and pipeline flow.",
         }
         query_processor_source = {
@@ -619,7 +625,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1,
             "end_line": 80,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
             "content": "def process_query():\n    pass",
         }
         searcher_source = {
@@ -628,7 +634,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1,
             "end_line": 80,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
             "content": "def search():\n    pass",
         }
         merge_source = {
@@ -637,7 +643,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 81,
             "end_line": 120,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
             "content": "def _merge_results():\n    pass",
         }
         rerank_source = {
@@ -646,7 +652,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 121,
             "end_line": 160,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
             "content": "def _rerank_with_query_tokens():\n    pass",
         }
         main_source = {
@@ -655,7 +661,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1,
             "end_line": 120,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
             "content": "def _run_query_impl():\n    pass",
         }
         code_answers_source = {
@@ -664,7 +670,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1,
             "end_line": 120,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
             "content": "def build_flow_answer():\n    pass",
         }
         llm_source = {
@@ -673,7 +679,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1,
             "end_line": 80,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
             "content": "def generate_answer():\n    pass",
         }
         validation_source = {
@@ -682,7 +688,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1,
             "end_line": 80,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
             "content": "def validate_generated_answer():\n    pass",
         }
         benchmark_source = {
@@ -691,7 +697,7 @@ class SourceLocationQueriesTests(unittest.TestCase):
             "start_line": 1,
             "end_line": 80,
             "expansion_type": "primary",
-            "labels": ["question_use:code-location"],
+            "semantic_labels": ["source-location"],
             "content": "def run_lexical_layer_benchmark():\n    pass",
         }
 
@@ -778,7 +784,8 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 "start_line": 121,
                 "end_line": 160,
                 "expansion_type": "primary",
-                "labels": ["question_use:code-location"],
+                "semantic_labels": ["source-location"],
+                "retrieval_score": 0.9,
                 "content": "def _rerank_with_query_tokens(raw_query, candidates):\n    return candidates",
             },
             {
@@ -787,7 +794,8 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 "start_line": 81,
                 "end_line": 120,
                 "expansion_type": "primary",
-                "labels": ["question_use:code-location"],
+                "semantic_labels": ["source-location"],
+                "retrieval_score": 0.9,
                 "content": "def _merge_results():\n    pass",
             },
             {
@@ -796,7 +804,8 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 "start_line": 160,
                 "end_line": 200,
                 "expansion_type": "primary",
-                "labels": ["question_use:code-location"],
+                "semantic_labels": ["source-location"],
+                "retrieval_score": 0.9,
                 "content": "def feature_specific_routing_boost(path, query):\n    return 0.0",
             },
             {
@@ -805,7 +814,8 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 "start_line": 377,
                 "end_line": 520,
                 "expansion_type": "primary",
-                "labels": ["question_use:code-location"],
+                "semantic_labels": ["source-location"],
+                "retrieval_score": 0.9,
                 "content": "def apply_query_negative_filters(sources, raw_query, **kwargs):\n    return sources",
             },
             {
@@ -814,7 +824,8 @@ class SourceLocationQueriesTests(unittest.TestCase):
                 "start_line": 1,
                 "end_line": 60,
                 "expansion_type": "primary",
-                "labels": ["question_use:code-location"],
+                "semantic_labels": ["source-location"],
+                "retrieval_score": 0.9,
                 "content": "def run_lexical_layer_benchmark():\n    pass",
             },
         ]

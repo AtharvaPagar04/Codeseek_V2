@@ -17,7 +17,7 @@ from rag_ingestion.config import (
     EMBEDDING_INPUT_MAX_TOTAL_CHARS,
 )
 from rag_ingestion.models.chunk import Chunk
-from rag_ingestion.stages.embedder import _embedding_input, KNOWN_LABELS
+from rag_ingestion.stages.embedder import _embedding_input, KNOWN_METADATA_FIELDS
 from retrieval.db import db_cursor
 
 
@@ -184,7 +184,7 @@ def main():
             if not line.strip():
                 continue
             has_known_prefix = False
-            for kl in KNOWN_LABELS:
+            for kl in KNOWN_METADATA_FIELDS:
                 if line.startswith(f"{kl}:"):
                     has_known_prefix = True
                     break
@@ -196,7 +196,7 @@ def main():
                 else:
                     grouped_metadata.append(line)
 
-        # Check 3: no empty labels, and no unmapped labels
+        # Check 3: no empty metadata fields and no unmapped field names
         for idx, line in enumerate(grouped_metadata):
             if ":" not in line:
                 errors.append(f"Chunk '{chunk.relative_path}': line '{line}' missing ':' divider.")
@@ -204,7 +204,7 @@ def main():
             label, val = line.split(":", 1)
             label = label.strip()
             val = val.strip()
-            if label not in KNOWN_LABELS:
+            if label not in KNOWN_METADATA_FIELDS:
                 errors.append(f"Chunk '{chunk.relative_path}': line '{line}' has unknown label '{label}'.")
             if not val:
                 errors.append(f"Chunk '{chunk.relative_path}': line '{line}' has empty value.")

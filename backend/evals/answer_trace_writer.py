@@ -55,7 +55,7 @@ def compact_context_chunk(chunk: dict, rank: int, max_chars: int = 4000) -> dict
         "file_type": chunk.get("file_type"),
         "start_line": start_line,
         "end_line": end_line,
-        "labels": chunk.get("labels") or [],
+        "semantic_labels": chunk.get("semantic_labels") or [],
         "score": score,
         "content": content,
     }

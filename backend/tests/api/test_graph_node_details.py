@@ -67,7 +67,7 @@ def _insert_projects_file() -> None:
                 json.dumps(
                     {
                         "description": "Fallback description from graph metadata.",
-                        "labels": ["ui_component"],
+                        "semantic_labels": ["ui-component"],
                     }
                 ),
             ),
@@ -105,7 +105,7 @@ def test_file_node_details_returns_symbol_descriptions_from_chunks(test_db, monk
                 "description": "Renders project cards from project data and conditionally displays Code and Live links.",
                 "start_line": 4,
                 "end_line": 149,
-                "labels": ["ui_component"],
+                "semantic_labels": ["ui-component"],
                 "content_excerpt": "function Projects() { return <section>full body should not leak</section>; }",
             },
             "chunk-helper": {
@@ -143,7 +143,7 @@ def test_file_node_details_falls_back_to_graph_metadata(test_db, monkeypatch):
 
     assert data["symbols"][0]["name"] == "Projects"
     assert data["symbols"][0]["description"] == "Fallback description from graph metadata."
-    assert data["symbols"][0]["label"] == "ui_component"
+    assert data["symbols"][0]["label"] == "ui-component"
 
 
 def test_non_file_node_details_returns_empty_symbols(test_db):

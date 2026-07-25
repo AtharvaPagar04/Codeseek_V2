@@ -40,7 +40,7 @@ from retrieval.support.embedding_provider import (
 from retrieval.query.query_intent import (
     classify_query_intent,
     classify_source_intent,
-    compute_label_boost,
+    compute_semantic_label_boost,
 )
 from retrieval.support.path_utils import (
     is_filename_only,
@@ -467,14 +467,16 @@ def _qdrant_call(fn):
     return None
 
 
-def _domain_boost_discovery(raw_query: str, entities: dict, query_info: dict = None) -> list[tuple[dict, float, str]]:
-    from retrieval.support.repo_profile import get_repo_profile, DOMAIN_SEARCH_TERMS
+def _semantic_boost_discovery(
+    raw_query: str, entities: dict, query_info: dict = None
+) -> list[tuple[dict, float, str]]:
+    from retrieval.support.repo_profile import get_repo_profile
+
     collection = get_collection_name()
     if query_info is not None:
-        query_info.setdefault("domain_boost_retrieval", {
+        query_info.setdefault("semantic_boost_retrieval", {
             "enabled": False,
-            "boost_labels": [],
-            "domain_terms": [],
+            "boost_semantic_keywords": [],
             "candidate_paths": [],
             "boosted_paths": [],
             "penalized_paths": [],
@@ -489,12 +491,14 @@ def _domain_boost_discovery(raw_query: str, entities: dict, query_info: dict = N
     if not collection:
         return []
     
-    boost_labels = entities.get("boost_labels") or []
+    semantic_keywords = entities.get("boost_semantic_keywords") or []
     if query_info is not None:
-        query_info["domain_boost_retrieval"]["enabled"] = bool(boost_labels)
-        query_info["domain_boost_retrieval"]["boost_labels"] = list(boost_labels)
+        query_info["semantic_boost_retrieval"]["enabled"] = bool(semantic_keywords)
+        query_info["semantic_boost_retrieval"]["boost_semantic_keywords"] = list(
+            semantic_keywords
+        )
 
-    if not boost_labels:
+    if not semantic_keywords:
         return []
         
     try:
@@ -504,29 +508,26 @@ def _domain_boost_discovery(raw_query: str, entities: dict, query_info: dict = N
         
     client = _get_client()
     
-    domain_terms = set()
-    for lbl in boost_labels:
-        if lbl in DOMAIN_SEARCH_TERMS:
-            domain_terms.update(DOMAIN_SEARCH_TERMS[lbl])
-            
-    if query_info is not None:
-        query_info["domain_boost_retrieval"]["domain_terms"] = list(domain_terms)
-
-    if not domain_terms:
-        return []
+    search_terms = {
+        variant
+        for keyword in semantic_keywords
+        for variant in (keyword, keyword.replace("-", " "))
+    }
         
     file_scores = []
     for rel_path, meta in profile.files.items():
         score = 0.0
         matched_terms = set()
         
-        # 1. Label match
-        overlap_labels = set(meta["labels"]).intersection(boost_labels)
-        score += len(overlap_labels) * 5.0
+        # 1. Semantic-label match
+        overlap_semantic_labels = set(meta["semantic_labels"]).intersection(
+            semantic_keywords
+        )
+        score += len(overlap_semantic_labels) * 3.0
         
         # 2. Path/filename term overlap
         path_lower = rel_path.lower()
-        for term in domain_terms:
+        for term in search_terms:
             if term in path_lower:
                 score += 3.0
                 matched_terms.add(term)
@@ -534,19 +535,19 @@ def _domain_boost_discovery(raw_query: str, entities: dict, query_info: dict = N
         # 3. Summaries/code_intents overlap
         for summary in meta["summaries"]:
             sum_lower = summary.lower()
-            for term in domain_terms:
+            for term in search_terms:
                 if term in sum_lower:
                     score += 0.5
                     matched_terms.add(term)
         for intent in meta["code_intents"]:
             int_lower = intent.lower()
-            for term in domain_terms:
+            for term in search_terms:
                 if term in int_lower:
                     score += 0.5
                     matched_terms.add(term)
                     
         # 4. Dependency match
-        for term in domain_terms:
+        for term in search_terms:
             if term in meta["dependencies"]:
                 score += 1.0
                 matched_terms.add(term)
@@ -560,18 +561,18 @@ def _domain_boost_discovery(raw_query: str, entities: dict, query_info: dict = N
     # Take top 3 candidate files
     candidate_paths = [rel_path for rel_path, _, _ in file_scores[:3]]
     if query_info is not None:
-        query_info["domain_boost_retrieval"]["candidate_paths"] = candidate_paths
+        query_info["semantic_boost_retrieval"]["candidate_paths"] = candidate_paths
 
     for rel_path, score, matched_terms in file_scores[:3]:
         chunks = _scroll_exact_field_matches(client, collection, "relative_path", rel_path)
         for chunk in chunks:
             p = dict(chunk)
-            p["domain_boost_hit"] = True
-            p["domain_boost_labels"] = list(boost_labels)
-            p["domain_matched_terms"] = matched_terms
-            p["support_kind"] = "domain_boost"
-            p["domain_boost_score"] = score
-            results.append((p, 0.35 + min(score * 0.05, 0.25), "domain_boost"))
+            p["semantic_boost_hit"] = True
+            p["boost_semantic_keywords"] = list(semantic_keywords)
+            p["semantic_matched_terms"] = matched_terms
+            p["support_kind"] = "semantic_boost"
+            p["semantic_boost_score"] = score
+            results.append((p, 0.35 + min(score * 0.05, 0.25), "semantic_boost"))
             
     return results
 
@@ -771,7 +772,7 @@ def search(query_info: dict) -> list[dict]:
 
     direct_topic_results = _inject_direct_topics_candidates(raw_query, primary_intent)
     auth_routing_results = _inject_code_topic_routing_candidates(raw_query, primary_intent, matched_code_topic_route)
-    domain_boost_results = _domain_boost_discovery(raw_query, entities, query_info)
+    semantic_boost_results = _semantic_boost_discovery(raw_query, entities, query_info)
     feature_recall_results = _feature_recall_discovery(raw_query, query_info)
     framework_routing_results = _framework_aware_discovery(raw_query, query_info)
 
@@ -785,7 +786,7 @@ def search(query_info: dict) -> list[dict]:
         history_results,
         direct_topic_results,
         auth_routing_results,
-        domain_boost_results,
+        semantic_boost_results,
         feature_recall_results,
         framework_routing_results,
     )
@@ -812,31 +813,6 @@ def search(query_info: dict) -> list[dict]:
                 [(m, m.get("retrieval_score", 0.0), "previous_merged") for m in merged],
                 comp_semantic_results
             )
-
-    try:
-        from retrieval.generation.exact_value_grounding import detect_exact_value_query
-        exact_val_query = detect_exact_value_query(raw_query, query_info)
-        query_info["exact_value_grounding"] = exact_val_query
-        
-        if exact_val_query.get("enabled") and exact_val_query.get("target_paths"):
-            client = _get_client()
-            collection = get_collection_name()
-            exact_val_results = []
-            for path in exact_val_query["target_paths"]:
-                val_chunks = _scroll_exact_field_matches(client, collection, "relative_path", path)
-                for payload in val_chunks:
-                    p = dict(payload)
-                    p["exact_retrieval_hit"] = True
-                    p["support_kind"] = "exact_value_forced"
-                    exact_val_results.append((p, 10.0, "component_semantic"))
-            if exact_val_results:
-                merged = _merge_results(
-                    [(m, m.get("retrieval_score", 0.0), "previous_merged") for m in merged],
-                    exact_val_results
-                )
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
 
     # Inject repo-summary and structured overview evidence for any query whose
     # primary intent is broad/structural.  The phrase-based gate is kept as a
@@ -2000,6 +1976,7 @@ def _lexical_document_text(payload: dict) -> str:
         payload.get("signature", ""),
         payload.get("docstring", ""),
         payload.get("summary", ""),
+        payload.get("code_intent", ""),
         payload.get("content_excerpt", ""),
     ]
     for key in (
@@ -2018,6 +1995,7 @@ def _lexical_document_text(payload: dict) -> str:
         "routes",
         "api_terms",
         "summary_facts",
+        "semantic_labels",
     ):
         value = payload.get(key)
         if isinstance(value, list):
@@ -2174,9 +2152,9 @@ def _merge_results(*layers):
                 records[chunk_id]["retrieval_score"] = 0.0
                 records[chunk_id]["fusion_score"] = 0.0
                 records[chunk_id]["exact_retrieval_hit"] = False
-            if source in {"dense", "domain_boost"}:
+            if source in {"dense", "semantic_boost"}:
                 records[chunk_id]["retrieval_score"] = max(records[chunk_id]["retrieval_score"], score)
-            if source in {"dense", "lexical", "metadata", "domain_boost"}:
+            if source in {"dense", "lexical", "metadata", "semantic_boost"}:
                 records[chunk_id]["fusion_score"] += 1.0 / (60 + rank)
             if source in {
                 "filter",
@@ -2202,13 +2180,20 @@ def _merge_results(*layers):
                 records[chunk_id]["component_semantic_hit"] = payload["component_semantic_hit"]
                 records[chunk_id]["component_target_symbol"] = payload.get("component_target_symbol", "")
                 records[chunk_id]["component_target_path"] = payload.get("component_target_path", "")
-            if payload.get("domain_boost_hit"):
-                records[chunk_id]["domain_boost_hit"] = payload["domain_boost_hit"]
-                if payload.get("domain_boost_labels"):
-                    records[chunk_id]["domain_boost_labels"] = payload["domain_boost_labels"]
-                if payload.get("domain_matched_terms"):
-                    records[chunk_id]["domain_matched_terms"] = payload["domain_matched_terms"]
-                records[chunk_id]["domain_boost_score"] = max(records[chunk_id].get("domain_boost_score", 0.0), float(payload.get("domain_boost_score", 0.0)))
+            if payload.get("semantic_boost_hit"):
+                records[chunk_id]["semantic_boost_hit"] = payload["semantic_boost_hit"]
+                if payload.get("boost_semantic_keywords"):
+                    records[chunk_id]["boost_semantic_keywords"] = payload[
+                        "boost_semantic_keywords"
+                    ]
+                if payload.get("semantic_matched_terms"):
+                    records[chunk_id]["semantic_matched_terms"] = payload[
+                        "semantic_matched_terms"
+                    ]
+                records[chunk_id]["semantic_boost_score"] = max(
+                    records[chunk_id].get("semantic_boost_score", 0.0),
+                    float(payload.get("semantic_boost_score", 0.0)),
+                )
             if payload.get("feature_recall_hit"):
                 records[chunk_id]["feature_recall_hit"] = payload["feature_recall_hit"]
                 if payload.get("feature_recall_terms"):
@@ -2292,7 +2277,7 @@ def _inject_direct_topics_candidates(raw_query: str, primary_intent: str) -> lis
                 "content_excerpt": text[:4000],
                 "exact_retrieval_hit": True,
                 "support_kind": "direct_injection",
-                "labels": ["question_use:technical-explanation", "question_use:general-context"],
+                "semantic_labels": [],
             }
             results.append((payload, 0.95, "direct_injection"))
         except OSError:
@@ -3223,10 +3208,10 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
     extracted_entities = query_info.get("entities") if query_info else None
     extracted_symbols = extracted_entities.get("symbols", []) if extracted_entities else []
 
-    if extracted_entities and extracted_entities.get("boost_labels"):
-        current_boost = set(query_profile.get("boost_labels", []))
-        current_boost.update(extracted_entities.get("boost_labels", []))
-        query_profile["boost_labels"] = list(current_boost)
+    if extracted_entities and extracted_entities.get("boost_semantic_keywords"):
+        current_boost = set(query_profile.get("boost_semantic_keywords", []))
+        current_boost.update(extracted_entities.get("boost_semantic_keywords", []))
+        query_profile["boost_semantic_keywords"] = list(current_boost)
     is_followup = query_info.get("is_followup", False) if query_info else False
     is_low_context = (query_info.get("primary_intent") == "LOW_CONTEXT") if query_info else False
     primary_intent = query_info.get("primary_intent") if query_info else None
@@ -3284,14 +3269,18 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
         vector_score = float(item.get("retrieval_score", 0.0))
         if item.get("exact_retrieval_hit"):
             vector_score = max(vector_score, 0.70)
-        elif item.get("domain_boost_hit"):
-            domain_boost = min(float(item.get("domain_boost_score", 0.0)), 15.0) / 30.0
-            vector_score = max(vector_score, 0.40 + domain_boost)
+        elif item.get("semantic_boost_hit"):
+            semantic_retrieval_boost = (
+                min(float(item.get("semantic_boost_score", 0.0)), 15.0) / 30.0
+            )
+            vector_score = max(vector_score, 0.40 + semantic_retrieval_boost)
         elif vector_score == 0.0 and item.get("fusion_score", 0.0) > 0.0:
             vector_score = min(0.40, 0.20 + 2.0 * float(item.get("fusion_score", 0.0)))
 
         exact_match_score = min(float(item.get("exact_entity_score", 0.0)) / 4.0, 1.0)
-        label_boost = compute_label_boost(item.get("labels", []), query_profile)
+        semantic_multiplier = compute_semantic_label_boost(
+            item.get("semantic_labels", []), query_profile
+        )
 
         overlap = _overlap_score(tokens, item) if tokens else 0
         path_symbol_boost = min(float(overlap) / 3.0, 1.0)
@@ -3501,7 +3490,6 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
         if is_code:
             chunk_type = item.get("chunk_type")
             symbol_name = item.get("symbol_name")
-            labels = item.get("labels", [])
             content = item.get("content") or item.get("content_excerpt") or ""
             
             # 1. Prefer function-level chunks
@@ -3532,16 +3520,12 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
                 if matched_exact:
                     code_request_boost += 3.0
                     
-            # 3. source/code labels
-            if any("code" in str(lbl).lower() for lbl in labels) or "question_use:code-snippet" in labels:
-                code_request_boost += 0.25
-                
-            # 4. content contains actual code constructs
+            # 3. content contains actual code constructs
             code_markers = ["def ", "class ", "import ", "return ", " = ", "self.", "async def "]
             if any(marker in content for marker in code_markers):
                 code_request_boost += 0.25
                 
-            # 5. implementation paths over docs/tests/reports
+            # 4. implementation paths over docs/tests/reports
             if role == "implementation":
                 code_request_boost += 0.30
             elif role in {"docs", "generated_eval", "test", "scratch/tooling"}:
@@ -3554,7 +3538,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
             if relative_path.endswith(".md") or not any(marker in content for marker in code_markers):
                 code_request_deboost -= 0.60
 
-            # 6. Specific topic code routing (Task 4)
+            # 5. Specific topic code routing (Task 4)
             q_lower = raw_query.lower()
             
             # "show me the query endpoint code" -> api_service.py::_query_impl
@@ -3633,10 +3617,9 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
 
         routing_boost = feature_specific_routing_boost(relative_path, raw_query)
 
-        final_score = (
+        base_score = (
             0.70 * vector_score
             + 0.15 * exact_match_score
-            + 0.10 * label_boost
             + 0.05 * path_symbol_boost
             + file_type_boost
             + followup_boost
@@ -3661,6 +3644,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
             + code_topic_route_boost
             + code_topic_route_deboost
         )
+        final_score = base_score * semantic_multiplier
 
         dyn_boost = 0.0
         dyn_penalty = 0.0
@@ -3731,7 +3715,7 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
 
     if query_info is not None and collection:
         from retrieval.support.repo_profile import build_diagnostics
-        query_info["domain_boost_retrieval"] = build_diagnostics(
+        query_info["semantic_boost_retrieval"] = build_diagnostics(
             diverse_results, raw_query, extracted_entities or {}, collection
         )
 

@@ -126,10 +126,16 @@ class TestDescribeChunks:
         generated = []
 
         def fake_generate(chunk, _cfg):
-            generated.append(chunk.chunk_id)
-            return "A description."
+            from rag_ingestion.stages.description import ChunkEnrichment
 
-        with patch("rag_ingestion.stages.description._generate_chunk_description", side_effect=fake_generate), \
+            generated.append(chunk.chunk_id)
+            return ChunkEnrichment(
+                "Describes the chunk.",
+                "A description.",
+                ["chunk-enrichment", "semantic-indexing", "intent-summary"],
+            )
+
+        with patch("rag_ingestion.stages.description._generate_chunk_enrichment", side_effect=fake_generate), \
              patch("rag_ingestion.stages.description.CHUNK_DESCRIPTION_MAX_CHUNKS", 3):
             describe_chunks(chunks, enabled=True, provider_config=provider)
 
@@ -142,13 +148,19 @@ class TestDescribeChunks:
         call_count = 0
 
         def flaky_generate(chunk, _cfg):
+            from rag_ingestion.stages.description import ChunkEnrichment
+
             nonlocal call_count
             call_count += 1
             if call_count == 2:
                 raise RuntimeError("Simulated provider error")
-            return "Description OK."
+            return ChunkEnrichment(
+                "Description OK.",
+                "Description OK.",
+                ["chunk-enrichment", "semantic-indexing", "intent-summary"],
+            )
 
-        with patch("rag_ingestion.stages.description._generate_chunk_description", side_effect=flaky_generate), \
+        with patch("rag_ingestion.stages.description._generate_chunk_enrichment", side_effect=flaky_generate), \
              patch("rag_ingestion.stages.description.CHUNK_DESCRIPTION_MAX_CHUNKS", 10):
             result = describe_chunks(chunks, enabled=True, provider_config=provider)
 
@@ -165,10 +177,16 @@ class TestDescribeChunks:
         received = {}
 
         def capture(chunk, cfg):
-            received.update(cfg)
-            return "ok"
+            from rag_ingestion.stages.description import ChunkEnrichment
 
-        with patch("rag_ingestion.stages.description._generate_chunk_description", side_effect=capture), \
+            received.update(cfg)
+            return ChunkEnrichment(
+                "ok",
+                "ok",
+                ["chunk-enrichment", "semantic-indexing", "intent-summary"],
+            )
+
+        with patch("rag_ingestion.stages.description._generate_chunk_enrichment", side_effect=capture), \
              patch("rag_ingestion.stages.description.CHUNK_DESCRIPTION_MAX_CHUNKS", 10):
             describe_chunks(chunks, enabled=True, provider_config=provider)
 

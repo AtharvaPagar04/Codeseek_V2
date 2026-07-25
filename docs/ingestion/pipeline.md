@@ -13,14 +13,13 @@
 5. Load incremental file signatures when enabled.
 6. Parse files, generate chunks, split overflow, and build metadata.
 7. Create deterministic chunk summaries and one repository-summary chunk.
-8. Optionally generate LLM descriptions.
-9. Generate labels.
-10. Create embeddings.
-11. Delete stale vectors for modified files and upsert current chunks to Qdrant.
-12. Persist session-file and chunk mappings.
-13. Rebuild or update the repository graph.
-14. Remove vectors and graph records for deleted paths.
-15. Save ingestion state.
+8. Optionally generate the code intent, description, and semantic labels in one LLM call.
+9. Create embeddings, including semantic labels in the embedding input.
+10. Delete stale vectors for modified files and upsert current chunks to Qdrant.
+11. Persist session-file and chunk mappings.
+12. Rebuild or update the repository graph.
+13. Remove vectors and graph records for deleted paths.
+14. Save ingestion state.
 
 Progress events and pipeline counters are emitted throughout the run.
 

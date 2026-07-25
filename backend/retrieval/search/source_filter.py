@@ -246,8 +246,6 @@ def _source_contract_score(raw_query: str, src: dict) -> int:
         score -= 1200
     if is_test_source(src):
         score -= 1000
-    if path_lower.endswith("label_constants.py") and source_intent in {"indexing_pipeline", "repository_analysis"}:
-        score -= 1200
     if "llm" in path_lower and source_intent == "api_endpoint":
         score -= 1600
     if symbol_name == "_provider_endpoint" and source_intent == "api_endpoint":
@@ -544,7 +542,7 @@ def source_excluded_for_query(
     if is_docs and not (allow_docs or explicit_non_impl) and not _query_is_retrieval_pipeline_flow(raw_query):
         return True
 
-    if source.get("domain_boost_hit") or source.get("exact_retrieval_hit"):
+    if source.get("semantic_boost_hit") or source.get("exact_retrieval_hit"):
         return False
 
     if not wants_searcher_internals and not _query_is_retrieval_pipeline_flow(raw_query) and path_lower in {
@@ -1058,7 +1056,7 @@ def select_sources_for_display(raw_query: str, sources: list[dict]) -> list[dict
         unique,
         key=lambda src: (
             -1 if src.get("exact_retrieval_hit") else 0,
-            -1 if src.get("domain_boost_hit") else 0
+            -1 if src.get("semantic_boost_hit") else 0
         )
     )
 
@@ -1090,7 +1088,7 @@ def apply_feature_location_gate(raw_query: str, sources: list[dict]) -> tuple[li
         score = 0
         if src.get("feature_recall_hit"):
             score += 4
-        if src.get("domain_boost_hit"):
+        if src.get("semantic_boost_hit"):
             score += 2
         rel_path = str(src.get("relative_path", "")).lower()
         symbol = str(src.get("symbol_name", "")).lower()
@@ -1560,7 +1558,6 @@ def has_strong_source_location_evidence(
     top = display_sources[0]
     path = top.get("relative_path", "")
     symbol = top.get("symbol_name", "")
-    labels = top.get("labels", [])
 
     # Get score
     score = top.get("score")
@@ -1586,11 +1583,7 @@ def has_strong_source_location_evidence(
         if symbol_lower in q_lower or any(part in q_lower for part in symbol_lower.split("_") if len(part) > 2):
             return True
 
-    # 3. top result has labels including question_use:code-location or question_use:implementation
-    if any(label in labels for label in ("question_use:code-location", "question_use:implementation")):
-        return True
-
-    # 4. top result is source-code and score/final_score is high
+    # 3. top result is source-code and score/final_score is high
     is_source_code = False
     if path:
         suffix = Path(path).suffix.lower()
@@ -1598,9 +1591,6 @@ def has_strong_source_location_evidence(
             is_source_code = True
     if top.get("chunk_type") in {"function", "class", "method"}:
         is_source_code = True
-    if "artifact:source-code" in labels:
-        is_source_code = True
-
     if is_source_code and score >= 0.5:
         return True
 
@@ -2736,8 +2726,8 @@ def prioritize_final_sources(raw_query: str, sources: list[dict], query_info: di
         if src.get("feature_recall_hit") and not (is_frontend or is_test or is_doc or is_config):
             return (3, -src.get("fusion_score", 0))
             
-        # 4. domain_boost_hit with implementation/source-code role
-        if src.get("domain_boost_hit") and not (is_frontend or is_test or is_doc or is_config):
+        # 4. semantic boost with implementation/source-code role
+        if src.get("semantic_boost_hit") and not (is_frontend or is_test or is_doc or is_config):
             return (4, -src.get("fusion_score", 0))
             
         # 5. behavior-grounding source role match

@@ -2,90 +2,78 @@ from __future__ import annotations
 
 import re
 
-# Word-boundary matched keywords mapping terms to target labels
-DOMAIN_KEYWORDS = {
-    "domain:auth": [
+# Query vocabulary mapped to likely free-text labels produced during ingestion.
+SEMANTIC_KEYWORDS_MAP = {
+    r"\b(auth|authentication|login|signin|oauth|token|jwt)\b": [
         "auth",
-        "authentication",
-        "login",
-        "signin",
-        "logout",
-        "oauth",
+        "jwt",
         "session",
-        "sessions",
-        "token",
-        "tokens",
+        "token-validation",
         "security",
+        "rbac",
     ],
-    "capability:session-validation": [
-        "session validation",
-        "validate session",
-        "session validate",
-        "check session",
+    r"\b(cache|caching|redis|ttl|expire|expiration)\b": [
+        "caching",
+        "redis",
+        "ttl",
+        "memoization",
+        "rate-limiting",
     ],
-    "capability:token-validation": [
-        "token validation",
-        "validate token",
-        "token validate",
+    r"\b(pagination|cursor|limit|offset)\b": [
+        "pagination",
+        "cursor",
+        "offset",
     ],
-    "domain:retrieval": ["retrieval", "retrieve", "retriever", "search"],
-    "domain:ingestion": [
+    r"\b(retrieval|retrieve|search|rerank|ranking)\b": [
+        "retrieval",
+        "hybrid-search",
+        "semantic-search",
+        "vector-scoring",
+        "reranking",
+    ],
+    r"\b(ingestion|ingest|indexing|chunking|parser|embedding)\b": [
         "ingestion",
-        "ingest",
-        "indexing",
-        "index",
-        "session indexer",
-        "parser",
-        "parse",
-        "chunker",
-        "chunking",
-        "embed",
-        "embedding",
-        "qdrant",
-        "qdrant storage",
-        "upsert",
-        "vector",
-        "chunk",
-        "storage",
-        "chunk storage",
+        "repository-indexing",
+        "code-chunking",
+        "ast-parser",
+        "embedding-generation",
     ],
-    "domain:storage": [
+    r"\b(qdrant|upsert|vector\s+(?:db|database|store)|chunk\s+storage)\b": [
         "qdrant",
-        "upsert",
-        "vector",
-        "chunk",
-        "storage",
-        "chunk storage",
+        "vector-storage",
+        "vector-upsert",
+        "vector-search",
     ],
-    "domain:configuration": [
-        "config",
-        "settings",
+    r"\b(config|configuration|settings|environment|env)\b": [
         "configuration",
+        "environment-variables",
+        "runtime-settings",
     ],
-    "domain:provider-management": ["provider", "providers", "api key", "api keys"],
-    "domain:frontend": ["frontend", "ui", "component", "components", "page", "pages", "css", "react"],
-    "domain:testing": ["testing", "test", "tests"],
-    "artifact:test-code": [
-        "test files",
-        "test code",
-        "unit test",
-        "unit tests",
-        "integration test",
-        "integration tests",
+    r"\b(provider|providers|api\s+key|credentials)\b": [
+        "provider-management",
+        "credential-storage",
+        "model-routing",
     ],
-    "domain:devops": ["devops", "docker", "dockerfile", "docker-compose", "deploy", "deployment"],
-    "domain:vector-db": ["vector db", "vector database", "qdrant"],
-    "domain:source-filtering": [
-        "source",
-        "filter",
-        "filtering",
-        "display source",
-        "selected source",
-        "reasoning source",
-        "context pruning",
-        "prune",
+    r"\b(frontend|ui|component|react|rendering)\b": [
+        "frontend",
+        "ui-rendering",
+        "react-component",
     ],
-    "tech:qdrant": ["qdrant"],
+    r"\b(test|tests|testing|pytest|unittest)\b": [
+        "testing",
+        "unit-testing",
+        "integration-testing",
+    ],
+    r"\b(devops|docker|dockerfile|deploy|deployment|ci|cd)\b": [
+        "containerization",
+        "deployment",
+        "continuous-integration",
+    ],
+    r"\b(source\s+filtering|context\s+pruning|display\s+sources?)\b": [
+        "source-filtering",
+        "context-pruning",
+        "evidence-selection",
+    ],
 }
 
 
@@ -101,13 +89,18 @@ def _any_term_in_query(terms: list[str], query: str) -> bool:
     return any(_term_in_query(term, query) for term in terms)
 
 
-def extract_domain_hints(query: str) -> list[str]:
-    """Scan query for domain/capability/tech keyword hints."""
-    hints = []
-    for label, terms in DOMAIN_KEYWORDS.items():
-        if _any_term_in_query(terms, query):
-            hints.append(label)
-    return hints
+def extract_semantic_boosts(query: str) -> list[str]:
+    """Return de-duplicated semantic labels suggested by query vocabulary."""
+    boosts: list[str] = []
+    seen: set[str] = set()
+    for pattern, labels in SEMANTIC_KEYWORDS_MAP.items():
+        if not re.search(pattern, query, re.IGNORECASE):
+            continue
+        for label in labels:
+            if label not in seen:
+                seen.add(label)
+                boosts.append(label)
+    return boosts
 
 
 def is_code_request_query(query: str) -> bool:
@@ -295,82 +288,53 @@ def is_source_location_query(query: str) -> bool:
 
 
 def classify_query_intent(query: str) -> dict:
-    """Classify query intent and determine labels to boost."""
+    """Classify query intent and determine semantic labels to boost."""
     q = query.lower()
-    domain_hints = extract_domain_hints(query)
+    semantic_boosts = extract_semantic_boosts(query)
 
     intent = "general_context"
-    boost_labels = []
 
     response_mode = classify_response_mode(query)
 
     # Check broad explanation modes before symbol/source-location routing.
     if response_mode == "overview":
         intent = "general_context"
-        boost_labels = ["question_use:repo-overview", "question_use:general-context"]
     elif response_mode in {"feature_explanation", "architecture_explanation"}:
         intent = "technical_explanation"
-        boost_labels = ["question_use:technical-explanation", "question_use:code-location"]
     elif is_source_location_query(query):
         intent = "code_location"
-        boost_labels = ["question_use:code-location", "question_use:technical-explanation"]
     # 0. CODE_REQUEST detection first
     elif is_code_request_query(query):
         intent = "CODE_REQUEST"
-        boost_labels = ["question_use:code-snippet", "question_use:code-location"]
     # 1. code_snippet
     elif _any_term_in_query(["code", "snippet", "example", "show me", "print"], q):
         intent = "code_snippet"
-        boost_labels = ["question_use:code-snippet", "question_use:code-location"]
 
     # 2. implementation
     elif _any_term_in_query(["how do i", "how to", "change", "modify", "write", "create", "add", "refactor"], q):
         intent = "implementation"
-        boost_labels = ["question_use:implementation", "question_use:technical-explanation"]
 
     # 3. "how is/how are ... implemented" compound check → technical_explanation
     elif ("how is" in q or "how are" in q) and "implemented" in q:
         intent = "technical_explanation"
-        boost_labels = ["question_use:technical-explanation", "question_use:code-location"]
 
     # 4. code_location
     elif _any_term_in_query(["where is", "where are", "find", "locate", "path", "paths", "directory"], q):
         intent = "code_location"
-        boost_labels = ["question_use:code-location", "question_use:technical-explanation"]
 
     # 5. technical_explanation (general)
     elif _any_term_in_query(["how does", "how do", "why", "explain", "what is", "what does", "work", "works"], q):
         intent = "technical_explanation"
-        boost_labels = ["question_use:technical-explanation", "question_use:code-location"]
 
     # 6/7. general_context (default fallback)
     else:
         intent = "general_context"
-        boost_labels = ["question_use:general-context", "question_use:repo-overview"]
-
-    # Merge domain hints into boost_labels
-    seen = set()
-    merged_boost = []
-    for label in boost_labels + domain_hints:
-        if label not in seen:
-            seen.add(label)
-            merged_boost.append(label)
 
     return {
         "intent": intent,
         "response_mode": response_mode,
-        "boost_labels": merged_boost,
+        "boost_semantic_keywords": semantic_boosts,
     }
-
-
-LABEL_WEIGHTS = {
-    "question_use": 0.15,
-    "capability": 0.12,
-    "domain": 0.10,
-    "artifact": 0.08,
-    "code_role": 0.08,
-    "tech": 0.06,
-}
 
 
 # Source contracts are intentionally expressed as intent names only. Path
@@ -516,16 +480,14 @@ def preferred_source_paths_for_intent(source_intent: str) -> tuple[str, ...]:
     return SOURCE_INTENT_CONTRACTS.get(source_intent, ())
 
 
-def compute_label_boost(chunk_labels: list[str], query_profile: dict) -> float:
-    """Compute label boost score for a candidate chunk based on query profile."""
-    boost_labels = set(query_profile.get("boost_labels", []))
-    boost = 0.0
-    for label in chunk_labels:
-        if label not in boost_labels:
-            continue
-        category = label.split(":", 1)[0]
-        boost += LABEL_WEIGHTS.get(category, 0.05)
-    return min(boost, 1.0)
+def compute_semantic_label_boost(
+    semantic_labels: list[str], query_profile: dict
+) -> float:
+    """Return a multiplicative boost factor (1.0 + 0.20 per matching label) for query/chunk semantic-label overlap."""
+    expected = set(query_profile.get("boost_semantic_keywords", []))
+    overlap = expected.intersection(semantic_labels or [])
+    return 1.0 + (len(overlap) * 0.20)
+
 
 
 def is_dependency_trace_query(query: str) -> bool:

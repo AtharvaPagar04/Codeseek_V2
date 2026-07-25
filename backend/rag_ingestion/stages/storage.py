@@ -181,7 +181,7 @@ def _payload(chunk: Chunk) -> dict:
         "setup_steps": chunk.setup_steps,
         "usage_commands": chunk.usage_commands,
         "architecture_notes": chunk.architecture_notes,
-        "labels": getattr(chunk, "labels", []),
+        "semantic_labels": getattr(chunk, "semantic_labels", []),
         "code_intent": getattr(chunk, "code_intent", ""),
         "content_excerpt": chunk.content[:CONTENT_EXCERPT_CHARS],
     }

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import math
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
 from retrieval.support.qdrant_config import create_qdrant_client
 
-from rag_ingestion.label_constants import LABEL_REGISTRY, MAX_TOTAL_LABELS
+from rag_ingestion.stages.description import BLACKLISTED_SEMANTIC_LABELS
 
 EMBEDDING_DIM = 384
 CONTENT_EXCERPT_MAX = 12000
@@ -304,47 +305,45 @@ def main() -> int:
         if not payload.get("purpose") and not payload.get("summary_facts"):
             warnings.append(f"README has no purpose/summary_facts: {payload.get('relative_path')}")
 
-    # Labels validation
-    labeled = sum(1 for p in points if p.payload.get("labels"))
+    # Semantic-label validation
+    labeled = sum(1 for p in points if p.payload.get("semantic_labels"))
     code_intent_present = sum(1 for p in points if p.payload.get("code_intent"))
 
     label_counts = Counter()
     for p in points:
-        for label in p.payload.get("labels", []):
+        for label in p.payload.get("semantic_labels", []):
             label_counts[label] += 1
 
-    unknown_labels = set()
     over_limit = []
-    snippet_on_non_code = []
     invalid_label_type = []
+    invalid_label_format = []
+    blacklisted_labels = set()
     for p in points:
-        labels = p.payload.get("labels")
+        labels = p.payload.get("semantic_labels")
         if labels is None or not isinstance(labels, list) or not all(isinstance(lb, str) for lb in labels):
             invalid_label_type.append(p.id)
             continue
-            
+
         for label in labels:
-            if label not in LABEL_REGISTRY:
-                unknown_labels.add(label)
-        if len(labels) > MAX_TOTAL_LABELS:
+            if label in BLACKLISTED_SEMANTIC_LABELS:
+                blacklisted_labels.add(label)
+            if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", label):
+                invalid_label_format.append((p.id, label))
+        if len(labels) > 5:
             over_limit.append(p.id)
-        if "question_use:code-snippet" in labels:
-            if "artifact:source-code" not in labels:
-                snippet_on_non_code.append(p.id)
 
-    if unknown_labels:
-        errors.append(f"unknown labels found in points: {unknown_labels}")
+    if blacklisted_labels:
+        errors.append(f"blacklisted semantic labels found in points: {blacklisted_labels}")
     if over_limit:
-        errors.append(f"{len(over_limit)} chunks are over the total label limit of {MAX_TOTAL_LABELS}")
-    if snippet_on_non_code:
-        errors.append(f"{len(snippet_on_non_code)} chunks have question_use:code-snippet on non-source-code artifacts")
+        errors.append(f"{len(over_limit)} chunks exceed the semantic label limit of 5")
     if invalid_label_type:
-        errors.append(f"{len(invalid_label_type)} chunks have invalid labels type (not list of strings)")
-
-    auth_points = [p for p in points if "auth_store" in (p.payload.get("relative_path") or "")]
-    for p in auth_points:
-        if "domain:auth" not in (p.payload.get("labels") or []):
-            errors.append(f"Missing domain:auth in {p.payload.get('relative_path')}")
+        errors.append(
+            f"{len(invalid_label_type)} chunks have invalid semantic_labels type"
+        )
+    if invalid_label_format:
+        errors.append(
+            f"{len(invalid_label_format)} semantic labels are not lowercase hyphenated keywords"
+        )
 
     # Print report
     print("=" * 72)
@@ -378,20 +377,20 @@ def main() -> int:
     print(f"  content_excerpt:  {content_excerpts}/{len(points)}")
     print(f"  summary_facts:    {summary_facts}/{len(points)}")
     print(f"  repo_summary:     {repo_summary_count}")
-    print(f"  labels:           {labeled}/{len(points)}")
+    print(f"  semantic_labels:  {labeled}/{len(points)}")
     print(f"  code_intent:      {code_intent_present}/{len(points)}")
     print()
 
-    print("Top labels:")
+    print("Top semantic labels:")
     for label, count in label_counts.most_common(15):
         print(f"    {label}: {count}")
     print()
 
-    print("Label verification:")
-    print(f"  Unknown labels:                      {unknown_labels or 'none'}")
+    print("Semantic label verification:")
+    print(f"  Blacklisted labels:                  {blacklisted_labels or 'none'}")
     print(f"  Chunks over label limit:             {len(over_limit)}")
-    print(f"  code-snippet on non-source chunks:   {len(snippet_on_non_code)}")
     print(f"  Chunks with invalid labels type:     {len(invalid_label_type)}")
+    print(f"  Labels with invalid format:          {len(invalid_label_format)}")
     print()
 
     print("Important evidence found:")

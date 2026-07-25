@@ -4,35 +4,6 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Domain Search Terms Mapping from Phase 3
-DOMAIN_SEARCH_TERMS = {
-    "domain:auth": [
-        "auth", "login", "logout", "session", "cookie", "token",
-        "oauth", "credential", "authorization", "authentication", "security"
-    ],
-    "domain:retrieval": [
-        "retrieval", "search", "query", "rerank", "rank", "candidate",
-        "context", "source", "filter", "answer", "validation"
-    ],
-    "domain:ingestion": [
-        "ingestion", "index", "indexing", "parse", "parser", "chunk",
-        "embed", "embedding", "pipeline", "storage", "repo session"
-    ],
-    "domain:storage": [
-        "storage", "store", "stored", "upsert", "qdrant", "vector", "vectors", "point", "points",
-        "payload", "collection", "collections", "delete", "chunk", "chunks", "chunk storage",
-        "embedding", "embeddings", "scroll", "client"
-    ],
-    "domain:configuration": [
-        "config", "configuration", "settings", "env", "environment",
-        "secret", "key", "variable"
-    ],
-    "domain:source-filtering": [
-        "source", "filter", "filtering", "display source", "selected source",
-        "reasoning source", "context pruning", "prune"
-    ]
-}
-
 # Dynamic Feature Phrase Normalization Map from Phase 5
 FEATURE_PHRASE_NORMALIZATION = {
     "source filtering": ["source_filter", "source-filter", "filter_source", "filtering", "source"],
@@ -67,10 +38,12 @@ class RepoProfile:
                     "language": p.get("language") or "",
                     "defined_symbols": set(),
                     "exported_symbols": set(),
-                    "labels": set(),
+                    "semantic_labels": set(),
                     "env_keys": set(),
                     "dependencies": set(),
-                    "source_kind": self.classify_source_kind(rel_path, p.get("language"), p.get("labels")),
+                    "source_kind": self.classify_source_kind(
+                        rel_path, p.get("language"), p.get("semantic_labels")
+                    ),
                     "summaries": [],
                     "code_intents": [],
                 }
@@ -89,10 +62,9 @@ class RepoProfile:
             if q_sym:
                 f_meta["exported_symbols"].add(q_sym)
                 
-            # Collect labels
-            labels = p.get("labels")
-            if labels:
-                f_meta["labels"].update(labels)
+            semantic_labels = p.get("semantic_labels")
+            if semantic_labels:
+                f_meta["semantic_labels"].update(semantic_labels)
                 
             # Collect env keys/deps
             env_keys = p.get("env_keys")
@@ -194,11 +166,13 @@ class RepoProfile:
         if has_react:
             self.framework_profile["frameworks"].append("react")
 
-    def classify_source_kind(self, path: str, language: str | None, labels: list[str] | None) -> str:
+    def classify_source_kind(
+        self, path: str, language: str | None, semantic_labels: list[str] | None
+    ) -> str:
         path_lower = path.lower()
         filename = path.split("/")[-1].lower()
         lang = (language or "").lower()
-        lbls = [l.lower() for l in (labels or [])]
+        labels = [label.lower() for label in (semantic_labels or [])]
         
         if "/test/" in path_lower or "/tests/" in path_lower or filename.startswith("test_") or filename.endswith("_test.py"):
             return "tests"
@@ -209,16 +183,16 @@ class RepoProfile:
         if "frontend/src" in path_lower or "src/components" in path_lower or any(ext in lang for ext in ("js", "ts", "tsx", "jsx", "javascript", "typescript")):
             return "frontend"
         if "backend/" in path_lower or lang == "python":
-            if "rag_ingestion" in path_lower or "ingestion" in path_lower or any("ingestion" in l for l in lbls):
+            if "rag_ingestion" in path_lower or "ingestion" in path_lower or any("ingestion" in label for label in labels):
                 return "ingestion"
-            if "retrieval" in path_lower or any("retrieval" in l for l in lbls):
+            if "retrieval" in path_lower or any("retrieval" in label for label in labels):
                 return "retrieval"
             return "backend"
-        if "rag_ingestion" in path_lower or "ingestion" in path_lower or any("ingestion" in l for l in lbls):
+        if "rag_ingestion" in path_lower or "ingestion" in path_lower or any("ingestion" in label for label in labels):
             return "ingestion"
-        if "retrieval" in path_lower or any("retrieval" in l for l in lbls):
+        if "retrieval" in path_lower or any("retrieval" in label for label in labels):
             return "retrieval"
-        if "artifact:config-file" in lbls or any(pat in filename for pat in ("config", "settings", ".env", "tsconfig")):
+        if any(pat in filename for pat in ("config", "settings", ".env", "tsconfig")):
             return "config"
             
         return "implementation"
@@ -258,18 +232,13 @@ def compute_dynamic_boosts_and_penalties(item: dict, raw_query: str, entities: d
     
     query_lower = raw_query.lower()
     
-    # 1. Domain Boost
-    boost_labels = entities.get("boost_labels") or []
-    domain_terms = set()
-    for lbl in boost_labels:
-        if lbl in DOMAIN_SEARCH_TERMS:
-            domain_terms.update(DOMAIN_SEARCH_TERMS[lbl])
+    # 1. Semantic-label and vocabulary boost
+    semantic_keywords = set(entities.get("boost_semantic_keywords") or [])
             
     # File metadata from profile
     f_meta = profile.files.get(rel_path)
-    if f_meta and domain_terms:
-        # Label overlap
-        overlap_labels = set(f_meta["labels"]).intersection(boost_labels)
+    if f_meta and semantic_keywords:
+        overlap_labels = set(f_meta["semantic_labels"]).intersection(semantic_keywords)
         label_score = len(overlap_labels) * 1.5
         
         # Term overlap in path/filename/basename/defined_symbols
@@ -278,7 +247,7 @@ def compute_dynamic_boosts_and_penalties(item: dict, raw_query: str, entities: d
         filename_lower = f_meta["filename"].lower()
         basename_lower = f_meta["basename"].lower()
         
-        for term in domain_terms:
+        for term in semantic_keywords:
             if term in path_lower:
                 term_score += 0.8
             elif term in filename_lower:
@@ -294,18 +263,18 @@ def compute_dynamic_boosts_and_penalties(item: dict, raw_query: str, entities: d
                     
         content_lower = (item.get("content_excerpt") or item.get("content") or "").lower()
         if content_lower:
-            for term in domain_terms:
+            for term in semantic_keywords:
                 if term in content_lower:
                     term_score += 0.1
             for specific_term in ["client.upsert", "pointstruct", "payload", "collection_name"]:
                 if specific_term in content_lower:
                     term_score += 0.3
 
-        total_domain_score = label_score + term_score
-        if total_domain_score > 0.0:
-            boost += min(total_domain_score * 0.12, 0.45)
+        total_semantic_score = label_score + term_score
+        if total_semantic_score > 0.0:
+            boost += min(total_semantic_score * 0.12, 0.45)
             
-    if item.get("domain_boost_hit"):
+    if item.get("semantic_boost_hit"):
         boost += 0.35
 
     # 2. Feature Phrase Normalization
@@ -327,7 +296,7 @@ def compute_dynamic_boosts_and_penalties(item: dict, raw_query: str, entities: d
                     or var in summary_lower
                     or var in intent_lower
                     or var in content_lower
-                    or var in [l.lower() for l in item.get("labels", [])]
+                    or var in [label.lower() for label in item.get("semantic_labels", [])]
                 ):
                     phrase_match = True
                     break
@@ -344,7 +313,9 @@ def compute_dynamic_boosts_and_penalties(item: dict, raw_query: str, entities: d
     is_impl_query = any(ind in query_lower for ind in impl_indicators)
     
     # Classify source kind
-    kind = profile.classify_source_kind(rel_path, item.get("language"), item.get("labels"))
+    kind = profile.classify_source_kind(
+        rel_path, item.get("language"), item.get("semantic_labels")
+    )
     
     requests_frontend = any(t in query_lower for t in ["frontend", "ui", "component", "components", "page", "pages", "react", "jsx", "tsx", "display component", "render", "rendered", "rendering", "display", "displayed", "showing", "view", "views"])
     requests_tests = any(t in query_lower for t in ["test", "tests", "unit test", "integration test", "eval", "evals", "metrics", "audit", "fixture"])
@@ -385,13 +356,7 @@ def compute_dynamic_boosts_and_penalties(item: dict, raw_query: str, entities: d
     }
 
 def build_diagnostics(candidates: list[dict], raw_query: str, entities: dict, collection: str) -> dict:
-    boost_labels = entities.get("boost_labels") or []
-    
-    # Extract active domain terms
-    domain_terms = set()
-    for lbl in boost_labels:
-        if lbl in DOMAIN_SEARCH_TERMS:
-            domain_terms.update(DOMAIN_SEARCH_TERMS[lbl])
+    semantic_keywords = entities.get("boost_semantic_keywords") or []
             
     candidate_paths = []
     boosted_paths = []
@@ -436,9 +401,8 @@ def build_diagnostics(candidates: list[dict], raw_query: str, entities: dict, co
     exact_hits_preserved = any(item.get("exact_retrieval_hit") for item in candidates)
     
     return {
-        "enabled": len(boost_labels) > 0,
-        "boost_labels": list(boost_labels),
-        "domain_terms": list(domain_terms),
+        "enabled": bool(semantic_keywords),
+        "boost_semantic_keywords": list(semantic_keywords),
         "candidate_paths": sorted(list(set(candidate_paths)))[:10],
         "boosted_paths": sorted(list(set(boosted_paths)))[:10],
         "penalized_paths": sorted(list(set(penalized_paths)))[:10],
@@ -527,8 +491,8 @@ def discover_feature_recall_candidates(
                     term_score += 0.5
                     break
                     
-            for lbl in f_meta["labels"]:
-                if term in lbl.lower():
+            for label in f_meta["semantic_labels"]:
+                if term in label.lower():
                     term_score += 0.5
                     break
                     

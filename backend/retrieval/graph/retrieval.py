@@ -559,7 +559,7 @@ def _graph_active_candidate(candidate: dict, *, hydrate: bool = True) -> dict:
                 "end_line",
                 "signature",
                 "summary",
-                "labels",
+                "semantic_labels",
                 "source_of_truth",
             }
         }

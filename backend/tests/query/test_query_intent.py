@@ -67,22 +67,18 @@ def test_inject_source_contract_files_none_paths() -> None:
         assert "backend/retrieval/api_service.py" in info_set["entities"]["files"]
 
 
-def test_domain_boosts_auth_storage_config() -> None:
-    # 2. Add domain:auth for login/auth/authentication/oauth/session/security queries
-    for q in ["login endpoints", "auth flow", "authentication logic", "oauth setup", "session details", "security policies"]:
+def test_semantic_boosts_auth_storage_config() -> None:
+    for q in ["login endpoints", "auth flow", "authentication logic", "oauth setup"]:
         info = process_query(q)
-        assert "domain:auth" in info["entities"]["boost_labels"]
+        assert "auth" in info["entities"]["boost_semantic_keywords"]
 
-    # 3. Add domain:storage or domain:ingestion for qdrant/upsert/vector/chunk storage queries
-    for q in ["qdrant db", "upsert vectors", "vector search", "chunk storage", "storage logic"]:
+    for q in ["qdrant db", "upsert vectors", "chunk storage"]:
         info = process_query(q)
-        assert "domain:storage" in info["entities"]["boost_labels"]
-        assert "domain:ingestion" in info["entities"]["boost_labels"]
+        assert "vector-storage" in info["entities"]["boost_semantic_keywords"]
 
-    # 4. Add domain:configuration for config/settings/configuration queries
     for q in ["show config", "custom settings", "system configuration"]:
         info = process_query(q)
-        assert "domain:configuration" in info["entities"]["boost_labels"]
+        assert "configuration" in info["entities"]["boost_semantic_keywords"]
 
 
 def test_config_injector_for_plain_config_queries() -> None:
@@ -94,4 +90,3 @@ def test_config_injector_for_plain_config_queries() -> None:
     assert "backend/retrieval/config.py" in info["entities"]["files"]
     assert "frontend/tsconfig.json" in info["entities"]["files"]
     assert "other_file.py" not in info["entities"]["files"]
-

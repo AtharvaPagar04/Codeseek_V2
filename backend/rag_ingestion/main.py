@@ -69,7 +69,6 @@ def run_pipeline(
     """Run all ingestion stages in order."""
     from rag_ingestion.config import (
         CODESEEK_DESCRIPTION_MODEL,
-        CODESEEK_LABEL_MODEL,
         CODESEEK_DESCRIPTION_BATCH_SIZE,
         CODESEEK_EMBEDDING_BATCH_SIZE,
         CODESEEK_CHUNK_PROCESS_BATCH_SIZE,
@@ -80,7 +79,6 @@ def run_pipeline(
     )
 
     logger.info("[ingestion.config] description_model=%s", CODESEEK_DESCRIPTION_MODEL)
-    logger.info("[ingestion.config] label_model=%s", CODESEEK_LABEL_MODEL)
     logger.info("[ingestion.config] description_batch_size=%d", CODESEEK_DESCRIPTION_BATCH_SIZE)
     logger.info("[ingestion.config] embedding_batch_size=%d", CODESEEK_EMBEDDING_BATCH_SIZE)
     logger.info("[ingestion.config] chunk_process_batch_size=%d", CODESEEK_CHUNK_PROCESS_BATCH_SIZE)
@@ -236,29 +234,6 @@ def run_pipeline(
             unload_ollama_model(LOCAL_LLM_UNLOAD_MODEL)
             clear_python_cuda_cache("after ollama unload post-descriptions")
             log_gpu_memory_snapshot("after ollama unload post-descriptions")
-
-        # --- Labeling ---
-        from rag_ingestion.config import ENABLE_CHUNK_LABELS
-        if ENABLE_CHUNK_LABELS:
-            from rag_ingestion.stages.labeler import label_chunks
-            repo_name = repository.get("repository_name", "")
-            repo_root = repository.get("repository_root", "")
-            all_chunks = label_chunks(all_chunks, repo_name=repo_name, repo_root=repo_root)
-
-            labeled_count = sum(1 for c in all_chunks if getattr(c, "labels", None))
-            logger.info(
-                "Labeled %s/%s chunks before embedding",
-                labeled_count,
-                len(all_chunks),
-            )
-            for chunk in all_chunks[:5]:
-                logger.debug(
-                    "Labeled chunk sample: path=%s type=%s labels=%s code_intent=%s",
-                    chunk.relative_path,
-                    chunk.chunk_type,
-                    chunk.labels,
-                    chunk.code_intent,
-                )
 
         # --- Embedding ---
         emit("embedding", f"Embedding {len(all_chunks)} chunks…")
@@ -600,14 +575,6 @@ def run_incremental_pipeline(
                 provider_config=provider_config,
                 event_callback=event_callback,
             )
-
-        # --- Labeling ---
-        from rag_ingestion.config import ENABLE_CHUNK_LABELS
-        if ENABLE_CHUNK_LABELS:
-            from rag_ingestion.stages.labeler import label_chunks
-            repo_name = repository.get("repository_name", "")
-            repo_root = repository.get("repository_root", "")
-            all_chunks = label_chunks(all_chunks, repo_name=repo_name, repo_root=repo_root)
 
         # --- Embedding ---
         emit("embedding", f"Embedding {len(all_chunks)} chunks…")

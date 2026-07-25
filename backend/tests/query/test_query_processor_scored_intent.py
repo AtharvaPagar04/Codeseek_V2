@@ -40,22 +40,24 @@ class QueryProcessorScoredIntentTests(unittest.TestCase):
         auth = query_processor.process_query("explain the auth session lifecycle flow")
         indexing = query_processor.process_query("trace the indexing session creation flow")
     
-        self.assertIn("domain:retrieval", orchestration["entities"]["boost_labels"])
-        self.assertIn("domain:auth", auth["entities"]["boost_labels"])
-        self.assertIn("domain:ingestion", indexing["entities"]["boost_labels"])
+        self.assertIn("retrieval", orchestration["entities"]["boost_semantic_keywords"])
+        self.assertIn("auth", auth["entities"]["boost_semantic_keywords"])
+        self.assertIn("ingestion", indexing["entities"]["boost_semantic_keywords"])
 
     def test_injects_deployment_config_files_for_metadata_search(self) -> None:
         active_paths = {"docker-compose.yml", "Dockerfile", ".env.example", "backend/config.py"}
         result = query_processor.process_query("how does deployment configuration work", active_index_paths=active_paths)
     
-        self.assertIn("domain:devops", result["entities"]["boost_labels"])
+        self.assertIn("deployment", result["entities"]["boost_semantic_keywords"])
         self.assertIn("backend/config.py", result["entities"]["files"])
         self.assertIn(".env.example", result["entities"]["files"])
 
     def test_injects_provider_credential_symbols_for_metadata_search(self) -> None:
         result = query_processor.process_query("explain provider credential lifecycle")
     
-        self.assertIn("domain:provider-management", result["entities"]["boost_labels"])
+        self.assertIn(
+            "provider-management", result["entities"]["boost_semantic_keywords"]
+        )
 
     def test_injects_architecture_files_for_metadata_search(self) -> None:
         active_paths = {"README.md", "docker-compose.yml", "backend/retrieval/api_service.py"}
@@ -89,7 +91,7 @@ class QueryProcessorScoredIntentTests(unittest.TestCase):
     def test_injects_auth_flow_symbols_for_varied_lifecycle_wording(self) -> None:
         result = query_processor.process_query("how does authentication cookie lifecycle work")
     
-        self.assertIn("domain:auth", result["entities"]["boost_labels"])
+        self.assertIn("auth", result["entities"]["boost_semantic_keywords"])
 
     def test_scored_intent_flag_still_emits_contract_in_legacy_mode(self) -> None:
         with patch("retrieval.query.query_processor.ENABLE_SCORED_INTENT", False):

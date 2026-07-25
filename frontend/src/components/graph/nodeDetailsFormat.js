@@ -36,7 +36,7 @@ export function normalizeNodeDetailSymbols(symbols = []) {
       start_line: symbol.start_line ?? null,
       end_line: symbol.end_line ?? null,
       label: symbol.label || '',
-      labels: Array.isArray(symbol.labels) ? symbol.labels : [],
+      semantic_labels: Array.isArray(symbol.semantic_labels) ? symbol.semantic_labels : [],
     }));
 }
 

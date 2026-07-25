@@ -146,7 +146,7 @@ def make_chunk():
             content=content or symbol_name or relative_path,
             summary=f"summary {symbol_name or relative_path}",
             description=f"description {symbol_name or relative_path}",
-            labels=["graph-test"],
+            semantic_labels=["graph-test"],
             source_of_truth=True,
         )
 

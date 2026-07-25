@@ -33,7 +33,7 @@ try:
         _local_content_match_candidates,
         _inject_direct_topics_candidates,
         _inject_code_topic_routing_candidates,
-        _domain_boost_discovery,
+        _semantic_boost_discovery,
         _feature_recall_discovery,
         _framework_aware_discovery,
         match_code_topic_route,
@@ -161,8 +161,8 @@ def main() -> None:
     for idx, (p, score, src) in enumerate(route_res[:5], start=1):
         print(f"   [{idx}] {p.get('relative_path')}:{p.get('start_line')}-{p.get('end_line')} | Score: {score:.4f}")
 
-    boost_res = _domain_boost_discovery(args.query, entities, query_info)
-    print(f"\n7. Domain Boost Discovery: retrieved {len(boost_res)} items")
+    boost_res = _semantic_boost_discovery(args.query, entities, query_info)
+    print(f"\n7. Semantic Boost Discovery: retrieved {len(boost_res)} items")
     for idx, (p, score, src) in enumerate(boost_res[:5], start=1):
         print(f"   [{idx}] {p.get('relative_path')}:{p.get('start_line')}-{p.get('end_line')} | Score: {score:.4f}")
 

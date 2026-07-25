@@ -20,7 +20,7 @@ Qdrant payloads include:
 - Chunk type, symbol name, parent, signature, lines, and token count.
 - Imports, calls, parameters, methods, and symbol relationships.
 - Source-of-truth and centrality signals.
-- Deterministic summary, optional description, labels, and code intent.
+- Deterministic summary plus optional LLM-generated description, code intent, and 3–5 specific semantic labels.
 - Structured configuration facts such as dependencies, scripts, services, ports, environment keys, entrypoints, and setup commands when detected.
 - A bounded `content_excerpt` for retrieval and diagnostics.
 

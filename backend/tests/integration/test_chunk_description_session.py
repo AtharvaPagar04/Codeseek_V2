@@ -37,7 +37,11 @@ def test_describe_chunks_override_true():
     with patch("rag_ingestion.stages.description.ENABLE_LLM_CHUNK_DESCRIPTIONS", False), \
          patch("rag_ingestion.stages.description._resolve_active_llm_config", return_value=provider_config), \
          patch("retrieval.generation.llm._chat_completion_request", return_value={
-             "choices": [{"message": {"content": "Generates a foo function."}}]
+             "choices": [{"message": {"content": (
+                 '{"code_intent":"Generates foo output.",'
+                 '"description":"Generates a foo function.",'
+                 '"semantic_labels":["foo-generation","output-building","callable-execution"]}'
+             )}}]
          }):
         
         result = describe_chunks(chunks, enabled=True)

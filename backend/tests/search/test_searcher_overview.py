@@ -25,11 +25,6 @@ class SearcherOverviewTests(unittest.TestCase):
             return_value={"enabled": False}
         )
         self._comp_targeting_patcher.start()
-        self._exact_val_patcher = patch(
-            "retrieval.generation.exact_value_grounding.detect_exact_value_query",
-            return_value={"enabled": False}
-        )
-        self._exact_val_patcher.start()
         from retrieval.support.repo_profile import RepoProfile
         self._get_repo_profile_patcher = patch(
             "retrieval.support.repo_profile.get_repo_profile",
@@ -50,7 +45,6 @@ class SearcherOverviewTests(unittest.TestCase):
         self._lexical_patcher.stop()
         self._repo_root_patcher.stop()
         self._comp_targeting_patcher.stop()
-        self._exact_val_patcher.stop()
         self._get_repo_profile_patcher.stop()
         self._structural_hints_patcher.stop()
         if self.original_repo_root is not None:

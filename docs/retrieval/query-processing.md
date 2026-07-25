@@ -25,7 +25,7 @@ Deterministic expressions extract:
 - Snake-case, CamelCase, and called symbols.
 - File references and normalized paths.
 - Environment keys, routes, package names, API terms, and services.
-- Domain labels and architecture, configuration, or flow hints.
+- Semantic keyword boosts plus architecture, configuration, or flow hints.
 
 Question words are removed from symbol extraction so prompts such as "How are..." do not create false symbol targets.
 

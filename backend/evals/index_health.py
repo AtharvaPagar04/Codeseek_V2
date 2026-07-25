@@ -194,14 +194,12 @@ def run_index_health_check(
     missing_file_type_required = 0
     file_type_optional_missing = 0
     
-    missing_labels = 0
+    missing_semantic_labels = 0
     missing_code_intent = 0
     missing_qualified_symbol = 0
 
-    points_with_labels = 0
+    points_with_semantic_labels = 0
     points_with_code_intent = 0
-    points_with_question_use = 0
-    points_with_domain = 0
     points_with_chunk_type = 0
     points_with_qualified_symbol = 0
 
@@ -219,7 +217,7 @@ def run_index_health_check(
         "missing_chunk_type": [],
         "missing_file_type_required": [],
         "missing_qualified_symbol": [],
-        "missing_labels": [],
+        "missing_semantic_labels": [],
         "missing_code_intent": [],
         "deleted_file_chunks": [],
     }
@@ -295,17 +293,15 @@ def run_index_health_check(
             else:
                 file_type_optional_missing += 1
 
-        # Check labels & code_intent
-        labels = payload.get("labels")
-        if not labels:
-            missing_labels += 1
-            add_offender("missing_labels", pt, "Missing labels array")
+        # Check semantic labels & code_intent
+        semantic_labels = payload.get("semantic_labels")
+        if not semantic_labels:
+            missing_semantic_labels += 1
+            add_offender(
+                "missing_semantic_labels", pt, "Missing semantic_labels array"
+            )
         else:
-            points_with_labels += 1
-            if any(l.startswith("question_use:") for l in labels):
-                points_with_question_use += 1
-            if any(l.startswith("domain:") for l in labels):
-                points_with_domain += 1
+            points_with_semantic_labels += 1
 
         if not payload.get("code_intent"):
             missing_code_intent += 1
@@ -314,10 +310,10 @@ def run_index_health_check(
             points_with_code_intent += 1
 
     # Calculate percentages
-    label_coverage_percent = (points_with_labels / total_points) * 100.0 if total_points else 0.0
+    semantic_label_coverage_percent = (
+        (points_with_semantic_labels / total_points) * 100.0 if total_points else 0.0
+    )
     code_intent_coverage_percent = (points_with_code_intent / total_points) * 100.0 if total_points else 0.0
-    question_use_label_coverage_percent = (points_with_question_use / total_points) * 100.0 if total_points else 0.0
-    domain_label_coverage_percent = (points_with_domain / total_points) * 100.0 if total_points else 0.0
     chunk_type_coverage_percent = (points_with_chunk_type / total_points) * 100.0 if total_points else 0.0
     qualified_symbol_coverage_percent = (
         (points_with_qualified_symbol / eligible_for_symbol * 100.0)
@@ -335,12 +331,6 @@ def run_index_health_check(
     if deleted_file_chunks > 0:
         repo_freshness_status = "files_deleted"
 
-    # Check config-gated label requirements
-    try:
-        from rag_ingestion.config import ENABLE_CHUNK_LABELS
-    except ImportError:
-        ENABLE_CHUNK_LABELS = True
-
     # Define validation thresholds
     is_healthy = (
         missing_chunk_id == 0 and
@@ -351,14 +341,6 @@ def run_index_health_check(
         missing_file_type_required == 0 and
         missing_qualified_symbol == 0
     )
-    if ENABLE_CHUNK_LABELS:
-        is_healthy = is_healthy and (
-            label_coverage_percent >= 90.0 and
-            code_intent_coverage_percent >= 90.0 and
-            missing_labels == 0 and
-            missing_code_intent == 0
-        )
-
     verdict = "PASS" if is_healthy else "FAIL"
 
     # Collect re-index reasons
@@ -379,16 +361,6 @@ def run_index_health_check(
         reasons.append(f"{missing_file_type_required} required files missing file_type")
     if missing_qualified_symbol > 0:
         reasons.append(f"{missing_qualified_symbol} qualified symbols missing for function/class chunks")
-    if ENABLE_CHUNK_LABELS:
-        if label_coverage_percent < 90.0:
-            reasons.append(f"Label coverage is only {label_coverage_percent:.2f}% (required >= 90.0%)")
-        if code_intent_coverage_percent < 90.0:
-            reasons.append(f"Code intent coverage is only {code_intent_coverage_percent:.2f}% (required >= 90.0%)")
-        if missing_labels > 0:
-            reasons.append(f"{missing_labels} chunks missing labels")
-        if missing_code_intent > 0:
-            reasons.append(f"{missing_code_intent} chunks missing code_intent")
-
     # Generate re-index guidance if failed
     reindex_remediation = ""
     if not is_healthy:
@@ -412,14 +384,14 @@ def run_index_health_check(
             "missing_file_type_total": missing_file_type_total,
             "missing_file_type_required": missing_file_type_required,
             "file_type_optional_missing": file_type_optional_missing,
-            "missing_labels": missing_labels,
+            "missing_semantic_labels": missing_semantic_labels,
             "missing_code_intent": missing_code_intent,
             "missing_qualified_symbol": missing_qualified_symbol,
             "deleted_file_chunks": deleted_file_chunks,
-            "label_coverage_percent": round(label_coverage_percent, 2),
+            "semantic_label_coverage_percent": round(
+                semantic_label_coverage_percent, 2
+            ),
             "code_intent_coverage_percent": round(code_intent_coverage_percent, 2),
-            "question_use_label_coverage_percent": round(question_use_label_coverage_percent, 2),
-            "domain_label_coverage_percent": round(domain_label_coverage_percent, 2),
             "chunk_type_coverage_percent": round(chunk_type_coverage_percent, 2),
             "qualified_symbol_coverage_percent": round(qualified_symbol_coverage_percent, 2),
             "repo_freshness_status": repo_freshness_status,

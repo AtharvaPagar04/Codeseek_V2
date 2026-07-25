@@ -15,7 +15,7 @@ class TestRetrievalTuning(unittest.TestCase):
             "chunk_type": "file",
             "retrieval_score": 0.5,
             "content": "import os\n\nPORT = os.getenv('PORT', 8000)\nDATABASE_URL = os.getenv('RETRIEVAL_DB_URL')",
-            "labels": ["question_use:code-location"]
+            "semantic_labels": ["source-location"]
         }
         # Candidate 2: query_intent.py (generic parser file)
         candidate_parser = {
@@ -24,7 +24,7 @@ class TestRetrievalTuning(unittest.TestCase):
             "chunk_type": "file",
             "retrieval_score": 0.6, # higher dense score
             "content": "def classify_query_intent(query): ...",
-            "labels": ["question_use:code-location"]
+            "semantic_labels": ["source-location"]
         }
         
         candidates = [candidate_config, candidate_parser]
@@ -67,7 +67,7 @@ class TestRetrievalTuning(unittest.TestCase):
             "chunk_type": "file",
             "retrieval_score": 0.4,
             "content": "def run_index_health_check(arg): ...",
-            "labels": []
+            "semantic_labels": []
         }
         cand_provider_health = {
             "chunk_id": "c_ph",
@@ -75,7 +75,7 @@ class TestRetrievalTuning(unittest.TestCase):
             "chunk_type": "file",
             "retrieval_score": 0.6, # higher vector score
             "content": "def _check_ollama_available(): ...",
-            "labels": []
+            "semantic_labels": []
         }
         
         candidates = [cand_index_health, cand_provider_health]
@@ -94,7 +94,7 @@ class TestRetrievalTuning(unittest.TestCase):
             "chunk_type": "file",
             "retrieval_score": 0.3,
             "content": "def get_reindex_guidance(): ...",
-            "labels": []
+            "semantic_labels": []
         }
         cand_index_health = {
             "chunk_id": "c_ih",
@@ -102,7 +102,7 @@ class TestRetrievalTuning(unittest.TestCase):
             "chunk_type": "file",
             "retrieval_score": 0.4,
             "content": "def run_index_health_check(arg): ...",
-            "labels": []
+            "semantic_labels": []
         }
         cand_provider_health = {
             "chunk_id": "c_ph",
@@ -110,7 +110,7 @@ class TestRetrievalTuning(unittest.TestCase):
             "chunk_type": "file",
             "retrieval_score": 0.6,
             "content": "def _check_ollama_available(): ...",
-            "labels": []
+            "semantic_labels": []
         }
         
         candidates = [cand_reindex_guidance, cand_index_health, cand_provider_health]
@@ -142,7 +142,7 @@ class TestRetrievalTuning(unittest.TestCase):
             "chunk_type": "file",
             "retrieval_score": 0.4,
             "content": "def run_index_health_check(arg): ...",
-            "labels": []
+            "semantic_labels": []
         }
         cand_provider_health = {
             "chunk_id": "c_ph",
@@ -150,7 +150,7 @@ class TestRetrievalTuning(unittest.TestCase):
             "chunk_type": "file",
             "retrieval_score": 0.6,
             "content": "def _check_ollama_available(): ...",
-            "labels": []
+            "semantic_labels": []
         }
         
         candidates = [cand_index_health, cand_provider_health]
@@ -166,7 +166,7 @@ class TestRetrievalTuning(unittest.TestCase):
             "relative_path": "bot/support.py",
             "fusion_score": 1 / 61,
             "retrieval_sources": ["lexical"],
-            "labels": [],
+            "semantic_labels": [],
         }
 
         results = _rerank_with_query_tokens(

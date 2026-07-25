@@ -268,7 +268,7 @@ def process_query(raw_query: str, active_index_paths: set[str] | None = None) ->
         },
     }
     _inject_flow_symbols(query, entities)
-    _inject_domain_boosts(query, entities)
+    _inject_semantic_boosts(query, entities)
     _inject_architecture_files(query, entities, active_index_paths)
     _inject_source_contract_files(query, entities, active_index_paths)
 
@@ -339,31 +339,31 @@ def _inject_flow_symbols(query: str, entities: dict) -> None:
     flow_kind = _flow_kind(query)
     if not flow_kind:
         return
-    flow_domain_map = {
-        "auth_session": "domain:auth",
-        "indexing_session": "domain:ingestion",
-        "provider_credentials": "domain:provider-management",
-        "retrieval_pipeline": "domain:retrieval",
-        "orchestration": "domain:retrieval",
-        "deployment_config": "domain:devops",
+    flow_semantic_map = {
+        "auth_session": ["auth", "session", "token-validation"],
+        "indexing_session": ["ingestion", "repository-indexing"],
+        "provider_credentials": ["provider-management", "credential-storage"],
+        "retrieval_pipeline": ["retrieval", "hybrid-search", "reranking"],
+        "orchestration": ["retrieval", "pipeline-orchestration"],
+        "deployment_config": ["deployment", "containerization"],
     }
-    label = flow_domain_map.get(flow_kind)
-    if label:
-        boosts = list(entities.get("boost_labels") or [])
-        if label not in boosts:
-            boosts.append(label)
-        entities["boost_labels"] = boosts
+    boosts = list(entities.get("boost_semantic_keywords") or [])
+    for keyword in flow_semantic_map.get(flow_kind, []):
+        if keyword not in boosts:
+            boosts.append(keyword)
+    if boosts:
+        entities["boost_semantic_keywords"] = boosts
 
 
-def _inject_domain_boosts(query: str, entities: dict) -> None:
-    from retrieval.query.query_intent import extract_domain_hints
-    hints = extract_domain_hints(query)
-    if hints:
-        boosts = list(entities.get("boost_labels") or [])
-        for hint in hints:
-            if hint not in boosts:
-                boosts.append(hint)
-        entities["boost_labels"] = boosts
+def _inject_semantic_boosts(query: str, entities: dict) -> None:
+    from retrieval.query.query_intent import extract_semantic_boosts
+
+    boosts = list(entities.get("boost_semantic_keywords") or [])
+    for keyword in extract_semantic_boosts(query):
+        if keyword not in boosts:
+            boosts.append(keyword)
+    if boosts:
+        entities["boost_semantic_keywords"] = boosts
 
 
 def _inject_architecture_files(query: str, entities: dict, active_index_paths: set[str] | None) -> None:

@@ -193,9 +193,8 @@ class TestSourceLocationConfidence:
         assert conf["level"] == "strong"
         assert "source-location" in conf["reason"]
 
-    def test_labels_match_is_strong(self):
+    def test_high_scoring_source_chunk_is_strong(self):
         sources = [_src("backend/retrieval/api_service.py", "", expansion="primary")]
-        sources[0]["labels"] = ["question_use:code-location"]
         query_info = {"intent": "SYMBOL", "primary_intent": "SYMBOL"}
         conf = score_evidence_confidence(
             "Where is FastAPI initialized",
@@ -215,4 +214,3 @@ class TestSourceLocationConfidence:
         )
         assert conf["level"] == "strong"
         assert "source-location" in conf["reason"]
-

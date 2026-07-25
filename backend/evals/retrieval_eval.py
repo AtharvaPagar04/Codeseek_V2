@@ -56,7 +56,7 @@ def format_point(payload: dict, score: float, source: str) -> dict:
         "qualified_symbol": payload.get("qualified_symbol", ""),
         "chunk_type": payload.get("chunk_type", ""),
         "file_type": payload.get("file_type", ""),
-        "labels": payload.get("labels", []),
+        "semantic_labels": payload.get("semantic_labels", []),
         "code_intent": payload.get("code_intent", ""),
         "score": score,
         "source_layer": source
@@ -71,7 +71,7 @@ def format_final_point(p: dict) -> dict:
         "qualified_symbol": p.get("qualified_symbol", ""),
         "chunk_type": p.get("chunk_type", ""),
         "file_type": p.get("file_type", ""),
-        "labels": p.get("labels", []),
+        "semantic_labels": p.get("semantic_labels", []),
         "code_intent": p.get("code_intent", ""),
         "score": p.get("retrieval_score", 0.0),
         "source_layer": "merged",
@@ -109,11 +109,11 @@ def _compact_candidate(candidate: dict, rank: int | None = None, include_excerpt
         "qualified_symbol": candidate.get("qualified_symbol"),
         "chunk_type": candidate.get("chunk_type"),
         "file_type": candidate.get("file_type"),
-        "labels": candidate.get("labels") or [],
+        "semantic_labels": candidate.get("semantic_labels") or [],
         "source_layers": candidate.get("source_layers") or [],
         "vector_score": _safe_round(candidate.get("vector_score")),
         "exact_match_score": _safe_round(candidate.get("exact_match_score")),
-        "label_boost": _safe_round(candidate.get("label_boost")),
+        "semantic_label_boost": _safe_round(candidate.get("semantic_label_boost")),
         "path_symbol_boost": _safe_round(candidate.get("path_symbol_boost")),
         "final_score": _safe_round(
             candidate.get("final_score")
@@ -356,7 +356,9 @@ def main():
                     "actual_intent": label_intent,
                     "expected_reranker_intent": expected_reranker_intent,
                     "actual_reranker_intent": mapped_reranker_intent,
-                    "boost_labels": q_info.get("boost_labels", []),
+                    "boost_semantic_keywords": q_info.get("entities", {}).get(
+                        "boost_semantic_keywords", []
+                    ),
                     "reason_if_detectable": reason_if_detectable
                 })
 
@@ -495,7 +497,9 @@ def main():
             "is_followup": is_followup,
             "is_low_context": is_low_context,
             "extracted_entities": q_info.get("entities", {}),
-            "boost_labels": q_info.get("boost_labels", []),
+            "boost_semantic_keywords": q_info.get("entities", {}).get(
+                "boost_semantic_keywords", []
+            ),
             "dense_results": dense_results[:5],
             "bm25_results": bm25_results[:5],
             "metadata_results": metadata_results[:5],

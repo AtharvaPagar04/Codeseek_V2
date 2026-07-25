@@ -83,7 +83,7 @@ def test_injected_candidates_do_not_dominate_fresh_matches() -> None:
         "relative_path": "backend/retrieval/main.py",
         "symbol_name": "run_query",
         "retrieval_score": 0.60,
-        "labels": [],
+        "semantic_labels": [],
         "content": "def run_query(): pass",
     }
     injected = {
@@ -91,7 +91,7 @@ def test_injected_candidates_do_not_dominate_fresh_matches() -> None:
         "relative_path": "backend/retrieval/api_service.py",
         "symbol_name": "_require_auth",
         "retrieval_score": 0.60,
-        "labels": [],
+        "semantic_labels": [],
         "content": "def _require_auth(): pass",
         "support_kind": "conversation_history",
         "injected_from_previous_turn": True,

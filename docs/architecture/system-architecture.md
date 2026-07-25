@@ -14,7 +14,7 @@ FastAPI backend
   |-- Qdrant: chunk vectors and searchable payload metadata
   |-- Repository workspace: cloned Git repositories
   |-- GitHub API: OAuth, user identity, repository listing and cloning
-  `-- LLM/embedding providers: generation, descriptions, labels, embeddings
+  `-- LLM/embedding providers: generation, chunk enrichment, embeddings
 ```
 
 ## Backend Boundaries

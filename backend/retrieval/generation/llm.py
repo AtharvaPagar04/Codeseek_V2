@@ -802,6 +802,7 @@ def _chat_completion_request(
     base_url: str = "",
     system_prompt: str | None = None,
     max_tokens: int | None = None,
+    response_format: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     url, headers = _provider_endpoint(provider, api_key, base_url=base_url)
     sys_prompt = system_prompt if system_prompt is not None else SYSTEM_PROMPT
@@ -813,6 +814,8 @@ def _chat_completion_request(
         ],
         "temperature": 0.4,
     }
+    if response_format:
+        payload["response_format"] = response_format
     effective_max_tokens = max_tokens
     if effective_max_tokens is None:
         effective_max_tokens = QUERY_MAX_TOKENS if provider == "local" else MAX_RESPONSE_TOKENS
@@ -919,21 +922,42 @@ def _classify_provider_error(exc: Exception | None) -> LlmProviderError:
 
 
 def _extract_message_content(response: dict[str, Any]) -> str:
+    if not isinstance(response, dict):
+        return ""
     choices = response.get("choices")
     if not isinstance(choices, list) or not choices:
+        if isinstance(response.get("content"), str):
+            return response["content"].strip()
+        if isinstance(response.get("text"), str):
+            return response["text"].strip()
         return ""
-    message = choices[0].get("message", {})
-    content = message.get("content", "")
+
+    first_choice = choices[0] if isinstance(choices[0], dict) else {}
+    message = first_choice.get("message")
+    if not isinstance(message, dict):
+        message = {}
+
+    content = message.get("content")
+    if content is None or (isinstance(content, str) and not content.strip()):
+        content = (
+            message.get("reasoning_content")
+            or message.get("reasoning")
+            or first_choice.get("text")
+            or ""
+        )
+
     if isinstance(content, str):
         return content.strip()
+
     if isinstance(content, list):
         parts = []
         for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                text = item.get("text", "")
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("content") or ""
                 if text:
                     parts.append(str(text))
         return "\n".join(parts).strip()
+
     return ""
 
 

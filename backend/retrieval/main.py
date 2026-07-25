@@ -871,8 +871,6 @@ def post_process_answer_and_sources(
     is_flow_query = "flow" in q_lower or "pipeline" in q_lower or "retrieval pipeline" in q_lower
 
     final_sources = list(sources)
-    if any(str(src.get("support_kind", "")).strip() == "portfolio_grounded" for src in final_sources):
-        return answer.strip(), _dedupe_sources(final_sources)
 
     if implementation_sources and not explicit_request and not is_flow_query:
         final_sources = implementation_sources
@@ -1578,24 +1576,26 @@ def _run_query_impl(
     )
     if "component_targeting" in query_info:
         meta["component_targeting"] = query_info["component_targeting"]
-    if "exact_value_grounding" in query_info:
-        meta["exact_value_grounding"] = query_info["exact_value_grounding"]
     if "feature_recall_discovery" in query_info:
         meta["feature_recall_discovery"] = query_info["feature_recall_discovery"]
     if "final_source_selection" in query_info:
         meta["final_source_selection"] = query_info["final_source_selection"]
     if "framework_routing" in query_info:
         meta["framework_routing"] = query_info["framework_routing"]
-    if "domain_boost_retrieval" in query_info:
-        db_diag = query_info["domain_boost_retrieval"]
-        db_diag["selected_primary_paths"] = _unique_paths([
-            src for src in display_sources if src.get("domain_boost_hit") and src.get("expansion_type") == "primary"
+    if "semantic_boost_retrieval" in query_info:
+        semantic_diag = query_info["semantic_boost_retrieval"]
+        semantic_diag["selected_primary_paths"] = _unique_paths([
+            src for src in display_sources if src.get("semantic_boost_hit") and src.get("expansion_type") == "primary"
         ])
-        db_diag["rendered_source_paths"] = _unique_paths([
-            src for src in shown_sources if src.get("domain_boost_hit")
+        semantic_diag["rendered_source_paths"] = _unique_paths([
+            src for src in shown_sources if src.get("semantic_boost_hit")
         ])
-        db_diag["dropped_paths"] = [p for p in db_diag.get("candidate_paths", []) if p not in db_diag.get("rendered_source_paths", [])]
-        meta["domain_boost_retrieval"] = db_diag
+        semantic_diag["dropped_paths"] = [
+            path
+            for path in semantic_diag.get("candidate_paths", [])
+            if path not in semantic_diag.get("rendered_source_paths", [])
+        ]
+        meta["semantic_boost_retrieval"] = semantic_diag
     if "feature_routing" in query_info:
         feature_diag = query_info["feature_routing"]
         feature_diag["selected_primary_paths"] = _unique_paths([
@@ -1834,90 +1834,6 @@ def _run_query_impl(
             return answer, shown_sources, token_count, meta
         return answer, shown_sources, token_count
 
-    from retrieval.generation.exact_value_grounding import build_portfolio_grounded_answer
-
-    portfolio_grounded = build_portfolio_grounded_answer(
-        raw_query,
-        repo_root=get_repo_root(),
-        evidence_sources=list(shown_sources) + list(reasoning_sources) + list(expanded) + list(candidates),
-        graph_shadow=meta.get("graph_shadow") if isinstance(meta.get("graph_shadow"), dict) else None,
-    )
-    if portfolio_grounded:
-        started = time.perf_counter()
-        answer = str(portfolio_grounded["answer"])
-        response_sources = list(portfolio_grounded["sources"])
-        reasoning_sources = _merge_sources_by_key(reasoning_sources, response_sources)
-        display_sources = list(response_sources)
-        shown_sources = list(response_sources)
-        meta["portfolio_grounding"] = dict(portfolio_grounded.get("diagnostics") or {})
-        meta["display_sources"] = list(display_sources)
-        meta["reasoning_sources"] = list(reasoning_sources)
-        meta["source_alignment"] = _collect_source_alignment_diagnostics(
-            display_sources=display_sources,
-            reasoning_sources=reasoning_sources,
-            rendered_sources=shown_sources,
-        )
-        metrics.add_stage("portfolio_grounded_answer", started)
-        cited_entities = extract_cited_entities(shown_sources)
-        response_mode = "portfolio_grounded"
-        memory.add(
-            raw_query,
-            answer,
-            resolved_query=_resolved_query_text(query_info, raw_query),
-            entities=cited_entities,
-            primary_intent=primary_intent,
-        )
-        meta["validation"] = getattr(memory, "last_validation", None)
-        meta.update(
-            {
-                "stage_latency_ms": metrics.stage_latency_ms,
-                "total_latency_ms": metrics.total_ms(),
-                "backend_latency_ms": metrics.total_ms(),
-                "provider_latency_ms": 0,
-                "errors": metrics.errors,
-                "response_mode": response_mode,
-                "evidence_confidence": evidence_confidence,
-            }
-        )
-        if evaluation is not None:
-            evaluation["response_mode"] = response_mode
-            evaluation["display_sources"] = list(display_sources)
-            evaluation["reasoning_sources"] = list(reasoning_sources)
-            evaluation["answer_context"] = ""
-            evaluation["answer_context_blocks"] = []
-        log_event(
-            "retrieval.request.end",
-            rid,
-            status="ok",
-            stage_latency_ms=metrics.stage_latency_ms,
-            total_latency_ms=metrics.total_ms(),
-            candidates=len(candidates),
-            expanded=len(expanded),
-            shown_sources=len(shown_sources),
-            source_filter=meta["source_filter"],
-            response_mode=response_mode,
-            evidence_confidence=evidence_confidence["level"],
-        )
-        _write_trace_for_query(
-            raw_query=raw_query,
-            answer=answer,
-            response_sources=shown_sources,
-            expanded=expanded,
-            memory=memory,
-            metrics=metrics,
-            primary_intent=primary_intent,
-            query_info=query_info,
-        )
-        if stream_handler:
-            stream_handler.on_status("Generating answer...")
-            for i in range(0, len(answer), 8):
-                if abort_event and abort_event.is_set():
-                    break
-                stream_handler.on_delta(answer[i:i+8])
-                time.sleep(0.01)
-        if return_meta:
-            return answer, shown_sources, token_count, meta
-        return answer, shown_sources, token_count
 
     # Build chunk list for deterministic answer paths: filtered to shown (display) sources only.
     allowed_keys = {
@@ -2728,20 +2644,6 @@ def _run_query_impl(
     llm_backend_started_ms = metrics.total_ms()
     started = time.perf_counter()
     llm_selection: dict[str, object] = {}
-    
-    from retrieval.generation.exact_value_grounding import extract_source_values, verify_exact_value_claims, attempt_repair
-    exact_val = query_info.get("exact_value_grounding")
-    is_exact_val = bool(exact_val and exact_val.get("enabled"))
-    if is_exact_val:
-        exact_val["raw_source_preferred"] = True
-        exact_val["summary_values_ignored"] = True
-        
-        exact_val["source_values"] = extract_source_values(
-            exact_val["query_type"], 
-            exact_val["value_terms"], 
-            reasoning_context
-        )
-
     if stream_handler:
         stream_handler.on_status("Generating answer...")
         conf_level = evidence_confidence["level"]
@@ -2764,8 +2666,7 @@ def _run_query_impl(
         ):
             if abort_event and abort_event.is_set():
                 break
-            if not is_exact_val:
-                stream_handler.on_delta(chunk)
+            stream_handler.on_delta(chunk)
             answer_chunks.append(chunk)
         answer = "".join(answer_chunks)
     else:
@@ -2780,28 +2681,6 @@ def _run_query_impl(
             evidence_confidence=evidence_confidence,
             selection_meta=llm_selection,
         )
-
-    if is_exact_val:
-        verify_res = verify_exact_value_claims(answer, exact_val["source_values"], query_info)
-        exact_val["verified"] = verify_res["verified"]
-        exact_val["failed_values"] = verify_res["failed_values"]
-        exact_val["answer_claims"] = verify_res["answer_claims"]
-        
-        if not verify_res["verified"]:
-            exact_val["repair_attempted"] = True
-            repair_text = attempt_repair(exact_val["source_values"], raw_query)
-            if repair_text:
-                answer = repair_text
-                exact_val["final_answer_repaired"] = True
-            else:
-                exact_val["final_answer_repaired"] = False
-        else:
-            exact_val["repair_attempted"] = False
-            exact_val["final_answer_repaired"] = False
-            
-        if is_exact_val and stream_handler:
-            # We buffer the whole answer if is_exact_val, so now we must send it out
-            stream_handler.on_delta(answer)
 
     token_count = reasoning_token_count
     metrics.add_stage("llm", started)

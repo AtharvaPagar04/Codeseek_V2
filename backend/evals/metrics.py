@@ -151,7 +151,7 @@ def compute_label_hit(
     expected_labels: list[str],
     k: int,
 ) -> bool:
-    """PASS if at least one chunk in top-k contains ALL expected labels.
+    """PASS if one top-k chunk contains all expected semantic labels.
 
     This implements the strict per-chunk AND check defined in the retrieval validation plan.
     """
@@ -162,7 +162,7 @@ def compute_label_hit(
     expected_set = set(expected_labels)
 
     for c in top_k:
-        chunk_labels = set(c.get("labels", []) or [])
+        chunk_labels = set(c.get("semantic_labels", []) or [])
         if expected_set.issubset(chunk_labels):
             return True
 
@@ -174,7 +174,7 @@ def compute_label_coverage(
     expected_labels: list[str],
     k: int,
 ) -> bool:
-    """PASS if the union of labels across all top-k chunks contains all expected labels.
+    """PASS if the top-k semantic-label union contains all expected labels.
 
     This is a softer diagnostic check than compute_label_hit().
     """
@@ -185,7 +185,7 @@ def compute_label_coverage(
     union_labels = set()
 
     for c in top_k:
-        union_labels.update(c.get("labels", []) or [])
+        union_labels.update(c.get("semantic_labels", []) or [])
 
     expected_set = set(expected_labels)
     return expected_set.issubset(union_labels)

@@ -53,7 +53,6 @@ CREATE TABLE IF NOT EXISTS repo_sessions (
     embeddings_stored INTEGER NOT NULL DEFAULT 0,
     idempotent_reuse INTEGER NOT NULL DEFAULT 0,
     enable_chunk_descriptions INTEGER NOT NULL DEFAULT 0,
-    refine_labels_with_llm INTEGER NOT NULL DEFAULT 0,
     current_commit_sha TEXT NOT NULL DEFAULT '',
     current_branch TEXT NOT NULL DEFAULT '',
     indexed_branch TEXT NOT NULL DEFAULT '',
@@ -433,10 +432,6 @@ def _init_sqlite(db_path: Path) -> None:
             conn.execute(
                 "ALTER TABLE repo_sessions ADD COLUMN enable_chunk_descriptions INTEGER NOT NULL DEFAULT 0"
             )
-        if "refine_labels_with_llm" not in repo_columns:
-            conn.execute(
-                "ALTER TABLE repo_sessions ADD COLUMN refine_labels_with_llm INTEGER NOT NULL DEFAULT 0"
-            )
         if "current_commit_sha" not in repo_columns:
             conn.execute(
                 "ALTER TABLE repo_sessions ADD COLUMN current_commit_sha TEXT NOT NULL DEFAULT ''"
@@ -531,10 +526,6 @@ def _init_postgres(database_url: str) -> None:
             if not _postgres_has_column(cursor, "repo_sessions", "enable_chunk_descriptions"):
                 cursor.execute(
                     "ALTER TABLE repo_sessions ADD COLUMN enable_chunk_descriptions INTEGER NOT NULL DEFAULT 0"
-                )
-            if not _postgres_has_column(cursor, "repo_sessions", "refine_labels_with_llm"):
-                cursor.execute(
-                    "ALTER TABLE repo_sessions ADD COLUMN refine_labels_with_llm INTEGER NOT NULL DEFAULT 0"
                 )
             if not _postgres_has_column(cursor, "repo_sessions", "current_commit_sha"):
                 cursor.execute(

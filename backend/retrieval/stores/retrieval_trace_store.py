@@ -477,7 +477,7 @@ def _compact_trace_item(
         "description",
         "summary",
         "label",
-        "labels",
+        "semantic_labels",
         "source_of_truth",
         "score",
         "retrieval_score",

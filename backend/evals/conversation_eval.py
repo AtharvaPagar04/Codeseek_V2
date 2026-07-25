@@ -76,7 +76,7 @@ def format_final_point(payload: dict) -> dict:
         "qualified_symbol": payload.get("qualified_symbol", ""),
         "chunk_type": payload.get("chunk_type", ""),
         "file_type": payload.get("file_type", ""),
-        "labels": payload.get("labels", []),
+        "semantic_labels": payload.get("semantic_labels", []),
         "file_symbols": payload.get("file_symbols", []),
         "calls": payload.get("calls", []),
         "imports": payload.get("imports", []),

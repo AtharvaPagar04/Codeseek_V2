@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import json
 import os
+import re
 import time
 import httpx
 
@@ -24,11 +27,38 @@ from retrieval.config import (
 def _sleep(seconds: float) -> None:
     time.sleep(seconds)
 
+BLACKLISTED_SEMANTIC_LABELS = {
+    "code",
+    "function",
+    "class",
+    "method",
+    "variable",
+    "logic",
+    "string",
+    "int",
+    "python",
+    "javascript",
+    "api",
+    "database",
+    "file",
+    "test",
+}
+
 SYSTEM_INSTRUCTION = (
-    "You describe code chunks for search retrieval.\n"
+    "You enrich code chunks for search retrieval.\n"
+    "CRITICAL FORMAT RULE: Respond ONLY with a single raw, valid JSON object.\n"
+    "DO NOT output any preamble, intro text ('We are given...', 'Let\\'s analyze...'), thinking steps, explanations, or reasoning.\n"
+    "Your response MUST start directly with '{' and end with '}'.\n"
     "Only describe behavior visible in the provided chunk.\n"
     "Do not invent props, dependencies, files, APIs, or side effects.\n"
-    "Use one concise paragraph under 45 words."
+    "Return only one valid JSON object with exactly these fields:\n"
+    '- "code_intent": a concise statement of what the chunk accomplishes;\n'
+    '- "description": one concise paragraph under 45 words;\n'
+    '- "semantic_labels": 3 to 5 highly specific lowercase keywords.\n'
+    "Semantic labels must represent core concepts, algorithms, or business logic, "
+    'use hyphens for multi-word labels (for example "jwt-validation", '
+    '"rate-limiting", "ast-parser", or "hybrid-search"), and must not contain '
+    "generic language, artifact, or programming terms."
 )
 
 PROMPT_TEMPLATE = (
@@ -38,10 +68,17 @@ PROMPT_TEMPLATE = (
     "Summary: {summary}\n"
     "Code:\n"
     "{content}\n\n"
-    "Write one concise description under 45 words."
+    "Return the JSON object now. Do not wrap it in markdown."
 )
 
 _local_debug_logged = False
+
+
+@dataclass(frozen=True)
+class ChunkEnrichment:
+    code_intent: str
+    description: str
+    semantic_labels: list[str]
 
 
 def _is_local_provider(provider_config: dict | None) -> bool:
@@ -466,7 +503,10 @@ def describe_chunks(
             start = time.perf_counter()
             success = False
             try:
-                chunk.description = _generate_chunk_description(chunk, resolved_config)
+                enrichment = _generate_chunk_enrichment(chunk, resolved_config)
+                chunk.code_intent = enrichment.code_intent
+                chunk.description = enrichment.description
+                chunk.semantic_labels = enrichment.semantic_labels
                 described += 1
                 success = True
                 elapsed = time.perf_counter() - start
@@ -476,6 +516,8 @@ def describe_chunks(
             except Exception as exc:
                 _handle_chunk_error(chunk, exc)
                 chunk.description = chunk.summary or ""
+                chunk.code_intent = chunk.summary or ""
+                chunk.semantic_labels = []
             finally:
                 processed_count += 1
 
@@ -523,11 +565,13 @@ def describe_chunks(
         metadata={"elapsed_seconds": total_elapsed},
     )
 
-    # Ensure non-described chunks have an empty description (not None).
+    # Ensure non-described chunks have explicit empty enrichment fields.
     described_ids = {c.chunk_id for c in selected_chunks}
     for chunk in chunks:
         if chunk.chunk_id not in described_ids:
             chunk.description = ""
+            chunk.code_intent = ""
+            chunk.semantic_labels = []
 
     return chunks
 
@@ -543,7 +587,7 @@ def _handle_chunk_error(chunk: Chunk, exc: Exception) -> None:
             )
             _sleep(5)
             # Retrying the generation once
-            # Note: _generate_chunk_description does not rely on global _provider_answer,
+            # Note: _generate_chunk_enrichment does not rely on global _provider_answer,
             # so we just call it directly.
             pass
         except Exception:
@@ -606,8 +650,8 @@ def _get_default_model(provider: str) -> str:
     return ""
 
 
-def _generate_chunk_description(chunk: Chunk, provider_config: dict) -> str:
-    """Call the LLM for a single chunk description.
+def _generate_chunk_enrichment(chunk: Chunk, provider_config: dict) -> ChunkEnrichment:
+    """Call the existing description LLM once for intent, description, and labels.
 
     Uses _chat_completion_request directly (not _provider_answer) so that the
     shared interactive-query circuit breaker state never blocks background
@@ -650,10 +694,198 @@ def _generate_chunk_description(chunk: Chunk, provider_config: dict) -> str:
             base_url=base_url,
             system_prompt=SYSTEM_INSTRUCTION,
             max_tokens=CODESEEK_DESCRIPTION_MAX_TOKENS,
+            response_format={"type": "json_object"},
         )
         text = _extract_message_content(response) or ""
 
-    return _clean_description(text)
+    return _parse_chunk_enrichment(text)
+
+
+def _clean_json_str(raw: str) -> str:
+    """Clean common LLM JSON syntax errors like trailing commas or unescaped control chars."""
+    cleaned = raw.strip()
+    # Remove trailing commas before closing braces/brackets
+    cleaned = re.sub(r",\s*([\]}])", r"\1", cleaned)
+    return cleaned
+
+
+def _repair_truncated_json(raw: str) -> dict | None:
+    """Attempt to repair incomplete/truncated JSON from cut-off LLM output."""
+    s = raw.strip()
+    first_brace = s.find("{")
+    if first_brace == -1:
+        return None
+    s = s[first_brace:]
+
+    candidates = [
+        s + '"',
+        s + '"}',
+        s + '"]}',
+        s + '"}]}',
+        s + '", "semantic_labels": []}',
+        re.sub(r',\s*"[^"]*$', '', s) + '}',
+        re.sub(r':\s*"[^"]*$', ': ""}', s),
+    ]
+
+    for cand in candidates:
+        cand_clean = _clean_json_str(cand)
+        try:
+            val = json.loads(cand_clean, strict=False)
+            if isinstance(val, dict):
+                return val
+        except Exception:
+            pass
+
+    return None
+
+
+def _try_parse_json_dict(s: str) -> dict | None:
+    cleaned = _clean_json_str(s)
+    try:
+        val = json.loads(cleaned, strict=False)
+        if isinstance(val, dict):
+            return val
+    except Exception:
+        pass
+
+    # Fallback: try ast.literal_eval if LLM returned Python dict syntax (single quotes)
+    try:
+        import ast
+        val = ast.literal_eval(cleaned)
+        if isinstance(val, dict):
+            return val
+    except Exception:
+        pass
+
+    # Fallback: attempt truncated JSON repair
+    return _repair_truncated_json(s)
+
+
+def _extract_json_object(text: str) -> dict:
+    """Decode one JSON object, tolerating surrounding preamble text, markdown fences, trailing commas, or control chars."""
+    candidate = (text or "").strip()
+    if not candidate:
+        raise ValueError("LLM enrichment response is empty")
+
+    # 1. Direct load attempt
+    res = _try_parse_json_dict(candidate)
+    if res is not None:
+        return res
+
+    # 2. Extract content inside markdown fence anywhere in the string
+    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", candidate, re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        res = _try_parse_json_dict(fence_match.group(1))
+        if res is not None:
+            return res
+
+    # 3. Strip any leading/trailing markdown fences if present
+    stripped = re.sub(r"^```(?:json)?\s*", "", candidate, flags=re.IGNORECASE)
+    stripped = re.sub(r"\s*```$", "", stripped)
+    res = _try_parse_json_dict(stripped)
+    if res is not None:
+        return res
+
+    # 4. Extract outer-most balanced curly braces '{ ... }'
+    first_brace = candidate.find("{")
+    last_brace = candidate.rfind("}")
+    if first_brace != -1 and last_brace > first_brace:
+        json_str = candidate[first_brace : last_brace + 1]
+        res = _try_parse_json_dict(json_str)
+        if res is not None:
+            return res
+
+    # 5. If response is pure reasoning text without braces, convert to pseudo-dict
+    if len(candidate) > 20 and not candidate.startswith("{"):
+        return {
+            "code_intent": _clean_description(candidate[:120]),
+            "description": _clean_description(candidate),
+            "semantic_labels": [],
+        }
+
+    snippet = candidate[:300] if len(candidate) > 300 else candidate
+    print(f"[description] Failed to parse JSON from LLM response snippet: {snippet!r}")
+    raise ValueError("LLM enrichment response is not valid JSON")
+
+
+def _normalize_semantic_label(label: str) -> str:
+    normalized = re.sub(r"[\s_]+", "-", label.strip().lower())
+    normalized = re.sub(r"[^a-z0-9-]", "", normalized)
+    normalized = re.sub(r"-{2,}", "-", normalized).strip("-")
+    return normalized
+
+
+def _parse_chunk_enrichment(text: str) -> ChunkEnrichment:
+    """Validate and normalize the LLM's structured enrichment response."""
+    payload = _extract_json_object(text)
+
+    # Extract fields with key fallback tolerance
+    code_intent = (
+        payload.get("code_intent")
+        or payload.get("intent")
+        or payload.get("summary")
+        or ""
+    )
+    description = (
+        payload.get("description")
+        or payload.get("details")
+        or code_intent
+        or ""
+    )
+    raw_labels = (
+        payload.get("semantic_labels")
+        or payload.get("labels")
+        or payload.get("keywords")
+        or []
+    )
+
+    if not isinstance(code_intent, str) or not code_intent.strip():
+        code_intent = description or "Code chunk behavior and functionality"
+    if not isinstance(description, str) or not description.strip():
+        description = code_intent or "Code chunk behavior and functionality"
+
+    if isinstance(raw_labels, str):
+        raw_labels = [s.strip() for s in raw_labels.split(",") if s.strip()]
+
+    if not isinstance(raw_labels, list):
+        raw_labels = []
+
+    semantic_labels: list[str] = []
+    for raw_label in raw_labels:
+        if isinstance(raw_label, str) and raw_label.strip():
+            label = _normalize_semantic_label(raw_label)
+            if (
+                not label
+                or label in BLACKLISTED_SEMANTIC_LABELS
+                or label in semantic_labels
+            ):
+                continue
+            semantic_labels.append(label)
+
+    cleaned_code_intent = _clean_description(code_intent)
+    cleaned_description = _clean_description(description)
+    if not cleaned_code_intent or not cleaned_description:
+        raise ValueError(
+            "code_intent and description must remain non-empty after sanitization"
+        )
+
+    # Fallback: if semantic labels cut off/empty, derive from code_intent and description text
+    if not semantic_labels:
+        text_source = f"{cleaned_code_intent} {cleaned_description}"
+        words = re.findall(r"\b[a-zA-Z0-9-]{3,}\b", text_source)
+        for w in words:
+            lbl = _normalize_semantic_label(w)
+            if lbl and lbl not in BLACKLISTED_SEMANTIC_LABELS and lbl not in semantic_labels:
+                semantic_labels.append(lbl)
+                if len(semantic_labels) >= 3:
+                    break
+
+    return ChunkEnrichment(
+        code_intent=cleaned_code_intent,
+        description=cleaned_description,
+        semantic_labels=semantic_labels[:5],
+    )
+
 
 
 def truncate_to_limit(text: str, max_chars: int) -> str:

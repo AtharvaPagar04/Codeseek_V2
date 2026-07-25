@@ -1,0 +1,37 @@
+*   [33m7df30a2[m[33m ([m[1;35mrefs/stash[m[33m)[m On main: WIP before updating develop
+[31m|[m[32m\[m  
+[31m|[m * [33m8ca2d09[m index on main: 9055fca docs: replace architecture diagram in README with upgraded dark-mode system infographic
+[31m|[m[31m/[m  
+* [33m9055fca[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m docs: replace architecture diagram in README with upgraded dark-mode system infographic
+* [33md34edd3[m docs: add validated end-to-end system architecture diagram to root README
+* [33mfa38342[m fix: update mermaid diagram edge label syntax for GitHub rendering
+* [33m7909249[m updated the docs
+* [33m61cd1c3[m Improved and refined  the response quality
+* [33m12f4d4a[m Add Docker Deployment Guide for CodeSeek V1
+* [33m7fc5e94[m Initial Production Release (v1.0.0)
+* [33me47adb0[m[33m ([m[1;31morigin/develop[m[33m, [m[1;32mfeature/response_improvement[m[33m, [m[1;32mdevelop[m[33m)[m deployment ready
+* [33m7b3b274[m the frontend works well need to fix pipeline graph
+* [33m877d0e1[m Most of the graph canvas is implemented except the node details isn't working need to fix that.
+* [33m71ed4d8[m[33m ([m[1;32mfeature/graph-assist-toggle[m[33m)[m feat: add repo graph visualization and code preview
+* [33maa9ba2b[m feat: add graph assist retrieval toggle
+* [33m022c4ab[m feat: add graph assist retrieval toggle
+*   [33mbdf8d00[m Merge branch 'staging'
+[34m|[m[35m\[m  
+[34m|[m * [33m19ccdf1[m[33m ([m[1;31morigin/staging[m[33m, [m[1;32mstaging[m[33m)[m fix: improve portfolio graph rag answer quality
+[34m|[m *   [33m3f4a979[m merge: promote develop to staging
+[34m|[m [36m|[m[1;31m\[m  
+[34m|[m [36m|[m *   [33mf7e95f8[m Merge branch 'chore/graph-env-examples' into develop
+[34m|[m [36m|[m [1;32m|[m[1;33m\[m  
+[34m|[m [36m|[m [1;32m|[m * [33m360648b[m[33m ([m[1;32mchore/graph-env-examples[m[33m)[m chore: document graph retrieval env flags
+[34m|[m [36m|[m [1;32m|[m[1;32m/[m  
+[34m|[m [36m|[m *   [33mca6a397[m Merge branch 'feature/repo-knowledge-graph' into develop
+[34m|[m [36m|[m [1;34m|[m[1;35m\[m  
+[34m|[m [36m|[m [1;34m|[m * [33m7bcb301[m[33m ([m[1;32mfeature/repo-knowledge-graph[m[33m)[m docs: document graph retrieval rollout
+[34m|[m [36m|[m [1;34m|[m * [33m3b06ed8[m test: isolate graph sqlite fixtures
+[34m|[m [36m|[m [1;34m|[m * [33mb5334e7[m fix: preserve aligned source cards
+[34m|[m [36m|[m [1;34m|[m * [33m57aa1c3[m feat: add active graph retrieval behind flag
+[34m|[m [36m|[m [1;34m|[m * [33m8fdd98a[m feat: reduce graph shadow noisy candidates
+[34m|[m [36m|[m [1;34m|[m * [33m56e3ea7[m feat: tune graph shadow candidate precision
+[34m|[m [36m|[m [1;34m|[m * [33m30ee850[m fix: resolve local TS aliases in graph imports
+[34m|[m [36m|[m [1;34m|[m * [33m9ef8649[m fix: harden graph shadow evaluator validation
+[34m|[m [36m|[m [1;34m|[m * [33md0ba6a6[m feat: add graph shadow evaluation tool

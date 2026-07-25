@@ -84,11 +84,20 @@ class ChunkDescriptionTests(unittest.TestCase):
         with patch("rag_ingestion.stages.description.ENABLE_LLM_CHUNK_DESCRIPTIONS", True), \
              patch("rag_ingestion.stages.description._resolve_active_llm_config", return_value=provider_config), \
              patch("retrieval.generation.llm._chat_completion_request", return_value={
-                 "choices": [{"message": {"content": "Generates a foo function."}}]
+                 "choices": [{"message": {"content": (
+                     '{"code_intent":"Generates foo output.",'
+                     '"description":"Generates a foo function.",'
+                     '"semantic_labels":["foo-generation","output-building","callable-execution"]}'
+                 )}}]
              }):
             
             result = describe_chunks(chunks)
             self.assertEqual(result[0].description, "Generates a foo function.")
+            self.assertEqual(result[0].code_intent, "Generates foo output.")
+            self.assertEqual(
+                result[0].semantic_labels,
+                ["foo-generation", "output-building", "callable-execution"],
+            )
 
     def test_describe_chunks_fallback_on_failure(self) -> None:
         chunks = [
@@ -116,6 +125,8 @@ class ChunkDescriptionTests(unittest.TestCase):
         )
         payload = _payload(chunk)
         self.assertEqual(payload["description"], "A beautiful function description.")
+        self.assertIn("semantic_labels", payload)
+        self.assertNotIn("labels", payload)
 
     def test_embedding_input_includes_description(self) -> None:
         chunk = Chunk(

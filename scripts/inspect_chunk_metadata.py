@@ -4,7 +4,7 @@ inspect_chunk_metadata.py
 =========================
 Read-only Postgres-aware chunk metadata inspector for CodeSeek.
 
-Inspects chunk descriptions, labels, file paths, symbols, line ranges,
+Inspects chunk descriptions, semantic labels, file paths, symbols, line ranges,
 chunk types, Qdrant payload keys, and Postgres session/file/chunk mappings.
 
 Usage:
@@ -12,7 +12,7 @@ Usage:
     python scripts/inspect_chunk_metadata.py --collection <name> --limit 20
     python scripts/inspect_chunk_metadata.py --collection <name> --keys
     python scripts/inspect_chunk_metadata.py --collection <name> --missing-descriptions
-    python scripts/inspect_chunk_metadata.py --collection <name> --missing-labels
+    python scripts/inspect_chunk_metadata.py --collection <name> --missing-semantic-labels
     python scripts/inspect_chunk_metadata.py --help
 """
 
@@ -41,14 +41,8 @@ DESCRIPTION_FIELDS = [
     "semantic_summary",
 ]
 
-LABEL_FIELDS = [
-    "labels",
-    "label",
-    "semantic_label",
-    "chunk_labels",
-    "tags",
-    "categories",
-    "intent_labels",
+SEMANTIC_LABEL_FIELDS = [
+    "semantic_labels",
 ]
 
 PATH_FIELDS = [
@@ -102,7 +96,7 @@ def _first(payload: dict, candidates: list[str], default=None):
     return default
 
 
-def _normalize_labels(raw) -> list[str]:
+def _normalize_semantic_labels(raw) -> list[str]:
     if not raw:
         return []
     if isinstance(raw, list):
@@ -137,9 +131,9 @@ def normalize_point(point_id, payload: dict) -> dict:
     description_raw = _first(payload, DESCRIPTION_FIELDS)
     desc_field_used = next((f for f in DESCRIPTION_FIELDS if f in payload), None)
 
-    label_raw = _first(payload, LABEL_FIELDS)
-    labels = _normalize_labels(label_raw)
-    label_field_used = next((f for f in LABEL_FIELDS if f in payload), None)
+    semantic_label_raw = _first(payload, SEMANTIC_LABEL_FIELDS)
+    semantic_labels = _normalize_semantic_labels(semantic_label_raw)
+    semantic_label_field_used = next((f for f in SEMANTIC_LABEL_FIELDS if f in payload), None)
 
     path = _first(payload, PATH_FIELDS, "")
     symbol = _first(payload, SYMBOL_FIELDS, "")
@@ -158,14 +152,14 @@ def normalize_point(point_id, payload: dict) -> dict:
         "chunk_type": chunk_type or "",
         "start_line": start_line,
         "end_line": end_line,
-        "labels": labels,
+        "semantic_labels": semantic_labels,
         "description": description,
         "payload_keys": sorted(payload.keys()),
         # internal meta for --keys and filters
         "_has_description": bool(description.strip()),
-        "_has_labels": bool(labels),
+        "_has_semantic_labels": bool(semantic_labels),
         "_desc_field": desc_field_used,
-        "_label_field": label_field_used,
+        "_semantic_label_field": semantic_label_field_used,
         "_raw_payload": payload,
     }
 
@@ -321,8 +315,8 @@ def qdrant_scroll(
     Scroll Qdrant collection, applying filters client-side.
 
     filters keys:
-      path_substr, label_substr, symbol_substr,
-      missing_descriptions, missing_labels
+      path_substr, semantic_label_substr, symbol_substr,
+      missing_descriptions, missing_semantic_labels
     """
     import urllib.request
     import urllib.error
@@ -354,10 +348,10 @@ def qdrant_scroll(
     scanned = 0
 
     path_sub = (filters.get("path_substr") or "").lower()
-    label_sub = (filters.get("label_substr") or "").lower()
+    label_sub = (filters.get("semantic_label_substr") or "").lower()
     symbol_sub = (filters.get("symbol_substr") or "").lower()
     want_missing_desc = filters.get("missing_descriptions", False)
-    want_missing_labels = filters.get("missing_labels", False)
+    want_missing_semantic_labels = filters.get("missing_semantic_labels", False)
 
     # Batch size: fetch more per page when we have filters to satisfy
     batch = min(max(limit * 3, 50), 250)
@@ -409,12 +403,12 @@ def qdrant_scroll(
             if symbol_sub and symbol_sub not in norm["symbol"].lower():
                 continue
             if label_sub:
-                labels_lower = " ".join(norm["labels"]).lower()
-                if label_sub not in labels_lower:
+                semantic_labels_lower = " ".join(norm["semantic_labels"]).lower()
+                if label_sub not in semantic_labels_lower:
                     continue
             if want_missing_desc and norm["_has_description"]:
                 continue
-            if want_missing_labels and norm["_has_labels"]:
+            if want_missing_semantic_labels and norm["_has_semantic_labels"]:
                 continue
 
             collected.append(norm)
@@ -461,7 +455,7 @@ def print_chunk(idx: int, norm: dict, full_description: bool = False, raw: bool 
     elif norm["start_line"] is not None:
         lines = str(norm["start_line"])
 
-    labels_str = ", ".join(norm["labels"]) if norm["labels"] else "(none)"
+    semantic_labels_str = ", ".join(norm["semantic_labels"]) if norm["semantic_labels"] else "(none)"
     keys_str = ", ".join(norm["payload_keys"])
 
     print(f"\nChunk {idx}")
@@ -471,7 +465,7 @@ def print_chunk(idx: int, norm: dict, full_description: bool = False, raw: bool 
     print(f"  Symbol     : {norm['symbol']}")
     print(f"  Type       : {norm['chunk_type']}")
     print(f"  Lines      : {lines}")
-    print(f"  Labels     : {labels_str}")
+    print(f"  Semantic labels: {semantic_labels_str}")
     if desc:
         print(f"  Description:")
         for line in desc.splitlines():
@@ -489,8 +483,8 @@ def print_keys_summary(chunks: list[dict], scanned: int) -> None:
     key_counter: Counter = Counter()
     with_desc = 0
     without_desc = 0
-    with_labels = 0
-    without_labels = 0
+    with_semantic_labels = 0
+    without_semantic_labels = 0
 
     for norm in chunks:
         for k in norm["payload_keys"]:
@@ -499,10 +493,10 @@ def print_keys_summary(chunks: list[dict], scanned: int) -> None:
             with_desc += 1
         else:
             without_desc += 1
-        if norm["_has_labels"]:
-            with_labels += 1
+        if norm["_has_semantic_labels"]:
+            with_semantic_labels += 1
         else:
-            without_labels += 1
+            without_semantic_labels += 1
 
     print()
     print("=" * 64)
@@ -515,8 +509,8 @@ def print_keys_summary(chunks: list[dict], scanned: int) -> None:
     print(f"  Matching chunks shown    : {len(chunks)}")
     print(f"  With description         : {with_desc}")
     print(f"  Missing description      : {without_desc}")
-    print(f"  With labels              : {with_labels}")
-    print(f"  Missing labels           : {without_labels}")
+    print(f"  With semantic labels        : {with_semantic_labels}")
+    print(f"  Missing semantic labels     : {without_semantic_labels}")
     print("=" * 64)
 
 
@@ -534,7 +528,7 @@ def output_json(session: dict | None, chunks: list[dict], scanned: int) -> None:
                 "chunk_type": c["chunk_type"],
                 "start_line": c["start_line"],
                 "end_line": c["end_line"],
-                "labels": c["labels"],
+                "semantic_labels": c["semantic_labels"],
                 "description": c["description"],
                 "payload_keys": c["payload_keys"],
             }
@@ -569,7 +563,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="inspect_chunk_metadata.py",
         description=(
             "Read-only Postgres-aware chunk metadata inspector for CodeSeek.\n"
-            "Inspects chunk descriptions, labels, file paths, symbols,\n"
+            "Inspects chunk descriptions, semantic labels, file paths, symbols,\n"
             "line ranges, chunk types, and Qdrant payload keys."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -580,7 +574,7 @@ Examples:
   python scripts/inspect_chunk_metadata.py --collection codeseek --keys
   python scripts/inspect_chunk_metadata.py --collection codeseek --missing-descriptions
   python scripts/inspect_chunk_metadata.py --collection codeseek --path retrieval/search/searcher.py
-  python scripts/inspect_chunk_metadata.py --collection codeseek --label domain:auth --raw
+  python scripts/inspect_chunk_metadata.py --collection codeseek --semantic-label jwt-validation --raw
   python scripts/inspect_chunk_metadata.py --collection codeseek --json --limit 50
         """,
     )
@@ -622,10 +616,18 @@ Examples:
     # Filters
     flt_g = p.add_argument_group("filters")
     flt_g.add_argument("--path", metavar="SUBSTR", help="Filter chunks by path substring (case-insensitive).")
-    flt_g.add_argument("--label", metavar="SUBSTR", help="Filter chunks by label substring (case-insensitive).")
+    flt_g.add_argument(
+        "--semantic-label",
+        metavar="SUBSTR",
+        help="Filter chunks by semantic-label substring (case-insensitive).",
+    )
     flt_g.add_argument("--symbol", metavar="SUBSTR", help="Filter chunks by symbol substring (case-insensitive).")
     flt_g.add_argument("--missing-descriptions", action="store_true", help="Only show chunks with missing/empty description.")
-    flt_g.add_argument("--missing-labels", action="store_true", help="Only show chunks with missing/empty labels.")
+    flt_g.add_argument(
+        "--missing-semantic-labels",
+        action="store_true",
+        help="Only show chunks with missing/empty semantic labels.",
+    )
 
     # Output
     out_g = p.add_argument_group("output")
@@ -750,14 +752,14 @@ def main() -> None:
         _info(f"Limit: {args.limit}  |  Max scan: {args.max_scan}")
         if args.path:
             _info(f"Filter: path contains '{args.path}'")
-        if args.label:
-            _info(f"Filter: label contains '{args.label}'")
+        if args.semantic_label:
+            _info(f"Filter: semantic label contains '{args.semantic_label}'")
         if args.symbol:
             _info(f"Filter: symbol contains '{args.symbol}'")
         if args.missing_descriptions:
             _info("Filter: only missing descriptions")
-        if args.missing_labels:
-            _info("Filter: only missing labels")
+        if args.missing_semantic_labels:
+            _info("Filter: only missing semantic labels")
         print()
 
     # -----------------------------------------------------------------------
@@ -765,10 +767,10 @@ def main() -> None:
     # -----------------------------------------------------------------------
     filters = {
         "path_substr": args.path or "",
-        "label_substr": args.label or "",
+        "semantic_label_substr": args.semantic_label or "",
         "symbol_substr": args.symbol or "",
         "missing_descriptions": args.missing_descriptions,
-        "missing_labels": args.missing_labels,
+        "missing_semantic_labels": args.missing_semantic_labels,
     }
 
     chunks, scanned = qdrant_scroll(
@@ -784,7 +786,7 @@ def main() -> None:
     # Step 4: Output
     # -----------------------------------------------------------------------
     if not chunks:
-        if args.missing_descriptions or args.missing_labels or args.path or args.label or args.symbol:
+        if args.missing_descriptions or args.missing_semantic_labels or args.path or args.semantic_label or args.symbol:
             _info(f"No matching chunks found after scanning {scanned} points in '{collection}'.")
         else:
             _info(f"No points found in collection '{collection}'.")
@@ -836,11 +838,11 @@ def main() -> None:
         else:
             # Always print a quick coverage summary at the end
             with_desc = sum(1 for c in chunks if c["_has_description"])
-            with_lbl = sum(1 for c in chunks if c["_has_labels"])
+            with_lbl = sum(1 for c in chunks if c["_has_semantic_labels"])
             print()
             print(
                 f"  Summary: {with_desc}/{len(chunks)} have description | "
-                f"{with_lbl}/{len(chunks)} have labels | "
+                f"{with_lbl}/{len(chunks)} have semantic labels | "
                 f"{scanned} points scanned"
             )
 

@@ -17,7 +17,7 @@ SQLite defaults to `data/codeseek.db`. PostgreSQL uses `CODESEEK_DATABASE_URL`.
 
 ## Qdrant
 
-Each point uses the chunk identifier as its vector identifier. The payload includes path fields, language, chunk type, symbol metadata, line range, imports, calls, summaries, labels, structured configuration facts, and a bounded content excerpt.
+Each point uses the chunk identifier as its vector identifier. The payload includes path fields, language, chunk type, symbol metadata, line range, imports, calls, summaries, `code_intent`, free-text `semantic_labels`, structured configuration facts, and a bounded content excerpt.
 
 Collection names are derived from tenant and repository identity. Query-time isolation verifies that the session workspace and collection match the expected binding.
 

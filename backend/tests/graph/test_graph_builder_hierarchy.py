@@ -50,7 +50,7 @@ def test_hierarchy_builder_creates_repo_folder_file_symbol_nodes(
     assert nodes[method_id]["chunk_id"] == "chunk-method"
     assert nodes[method_id]["start_line"] == 8
     metadata = json.loads(nodes[method_id]["metadata_json"])
-    assert metadata["labels"] == ["graph-test"]
+    assert metadata["semantic_labels"] == ["graph-test"]
     assert metadata["source_of_truth"] is True
     assert result.nodes_written == len(nodes)
     assert any(edge["edge_type"] == "contains" for edge in edges)

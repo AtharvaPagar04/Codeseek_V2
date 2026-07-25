@@ -982,7 +982,9 @@ def _symbol_detail_from_row(row: dict, chunk_row: dict, payload: dict) -> dict |
     name = _first_text(payload.get("symbol_name"), row.get("name"), payload.get("qualified_symbol"), row.get("qualified_name"))
     if not name:
         return None
-    labels = _coerce_labels(payload.get("labels") or metadata.get("labels"))
+    semantic_labels = _coerce_semantic_labels(
+        payload.get("semantic_labels") or metadata.get("semantic_labels")
+    )
     description = _best_description(payload, metadata)
     return {
         "chunk_id": row.get("chunk_id"),
@@ -992,8 +994,12 @@ def _symbol_detail_from_row(row: dict, chunk_row: dict, payload: dict) -> dict |
         "description": description,
         "start_line": _first_int(row.get("start_line"), payload.get("start_line"), chunk_row.get("start_line")),
         "end_line": _first_int(row.get("end_line"), payload.get("end_line"), chunk_row.get("end_line")),
-        "label": _first_text(payload.get("symbol_role"), payload.get("label"), labels[0] if labels else ""),
-        "labels": labels,
+        "label": _first_text(
+            payload.get("symbol_role"),
+            payload.get("label"),
+            semantic_labels[0] if semantic_labels else "",
+        ),
+        "semantic_labels": semantic_labels,
         "confidence": None,
     }
 
@@ -1005,7 +1011,7 @@ def _symbol_detail_from_chunk_row(row: dict, payload: dict) -> dict | None:
         return None
     if not name:
         return None
-    labels = _coerce_labels(payload.get("labels"))
+    semantic_labels = _coerce_semantic_labels(payload.get("semantic_labels"))
     return {
         "chunk_id": row.get("chunk_id"),
         "name": name,
@@ -1014,8 +1020,12 @@ def _symbol_detail_from_chunk_row(row: dict, payload: dict) -> dict | None:
         "description": _best_description(payload, {}),
         "start_line": _first_int(row.get("start_line"), payload.get("start_line")),
         "end_line": _first_int(row.get("end_line"), payload.get("end_line")),
-        "label": _first_text(payload.get("symbol_role"), payload.get("label"), labels[0] if labels else ""),
-        "labels": labels,
+        "label": _first_text(
+            payload.get("symbol_role"),
+            payload.get("label"),
+            semantic_labels[0] if semantic_labels else "",
+        ),
+        "semantic_labels": semantic_labels,
         "confidence": None,
     }
 
@@ -1054,7 +1064,7 @@ def _first_int(*values: object) -> int | None:
     return None
 
 
-def _coerce_labels(value: object) -> list[str]:
+def _coerce_semantic_labels(value: object) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value if str(item or "").strip()]
     if isinstance(value, str) and value.strip():

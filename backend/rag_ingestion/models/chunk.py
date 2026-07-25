@@ -61,6 +61,5 @@ class Chunk:
     architecture_notes: list[str] = field(default_factory=list)
     content: str = ""
     embedding: list[float] = field(default_factory=list)
-    labels: list[str] = field(default_factory=list)
-    label_confidences: dict[str, float] = field(default_factory=dict)
+    semantic_labels: list[str] = field(default_factory=list)
     code_intent: str = ""

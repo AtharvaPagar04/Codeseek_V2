@@ -929,7 +929,7 @@ def _chunk_metadata(chunk) -> str:
     return metadata_json(
         summary=getattr(chunk, "summary", ""),
         description=getattr(chunk, "description", ""),
-        labels=getattr(chunk, "labels", []),
+        semantic_labels=getattr(chunk, "semantic_labels", []),
         source_of_truth=getattr(chunk, "source_of_truth", False),
     )
 

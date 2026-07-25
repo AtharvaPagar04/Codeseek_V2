@@ -108,8 +108,8 @@
   expected_symbols:
     - "_env_int"
   expected_labels_in_top5:
-    - "artifact:source-code"
-    - "question_use:implementation"
+    - "configuration"
+    - "environment-variables"
   must_hit_top_k: 5
   notes: >
     Updated from config-artifact expectation. Current retrieval correctly returns
@@ -141,8 +141,8 @@
   expected_intent: "code_snippet"
   expected_reranker_intent: "SYMBOL"
   expected_labels_in_top3:
-    - "question_use:code-snippet"
-    - "domain:auth"
+    - "auth"
+    - "token-validation"
   must_hit_top_k: 3
 
 - id: q042
@@ -151,8 +151,8 @@
   expected_intent: "implementation"
   expected_reranker_intent: "SYMBOL"
   expected_labels_in_top3:
-    - "question_use:implementation"
-    - "domain:provider-management"
+    - "provider-management"
+    - "credential-storage"
   must_hit_top_k: 5
 
 - id: q043
@@ -167,8 +167,8 @@
   must_hit_top_k: 5
   notes: >
     Overview query currently retrieves high-level source context. Removed strict
-    question_use:repo-overview label expectation until repo-summary/overview
-    labeling is validated separately.
+    overview semantic-label expectation until repo-summary enrichment is
+    validated separately.
 
 - id: q044
   query: "How does auth work?"
@@ -176,6 +176,6 @@
   expected_intent: "technical_explanation"
   expected_reranker_intent: "ARCHITECTURE"
   expected_labels_in_top5:
-    - "domain:auth"
-    - "question_use:technical-explanation"
+    - "auth"
+    - "security"
   must_hit_top_k: 5

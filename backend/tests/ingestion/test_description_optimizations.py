@@ -14,10 +14,19 @@ from rag_ingestion.config import (
 )
 from rag_ingestion.models.chunk import Chunk
 from rag_ingestion.stages.description import (
+    ChunkEnrichment,
     _clean_description,
     _should_describe_chunk,
     describe_chunks,
 )
+
+
+def _enrichment(description: str) -> ChunkEnrichment:
+    return ChunkEnrichment(
+        code_intent=description,
+        description=description,
+        semantic_labels=["retrieval-enrichment", "semantic-indexing", "intent-summary"],
+    )
 
 
 def test_sleep_default_is_zero():
@@ -25,7 +34,7 @@ def test_sleep_default_is_zero():
 
 
 def test_max_output_tokens_exists():
-    assert CODESEEK_DESCRIPTION_MAX_TOKENS == 160
+    assert CODESEEK_DESCRIPTION_MAX_TOKENS == 1024
 
 
 
@@ -94,7 +103,10 @@ def test_description_stage_emits_selection_and_timing_events():
     ]
     provider = {"provider": "openai", "api_key": "test-key", "model": "gpt-4o-mini"}
 
-    with patch("rag_ingestion.stages.description._generate_chunk_description", return_value="A nice description."):
+    with patch(
+        "rag_ingestion.stages.description._generate_chunk_enrichment",
+        return_value=_enrichment("A nice description."),
+    ):
         describe_chunks(chunks, enabled=True, provider_config=provider, event_callback=callback)
 
     # We should have a selection event first
@@ -126,9 +138,12 @@ def test_description_stage_continues_on_failure():
         calls += 1
         if calls == 1:
             raise RuntimeError("LLM rate limit or timeout")
-        return "Decent description."
+        return _enrichment("Decent description.")
 
-    with patch("rag_ingestion.stages.description._generate_chunk_description", side_effect=flaky_generate):
+    with patch(
+        "rag_ingestion.stages.description._generate_chunk_enrichment",
+        side_effect=flaky_generate,
+    ):
         res = describe_chunks(chunks, enabled=True, provider_config=provider)
 
     assert len(res) == 2
@@ -162,7 +177,11 @@ def test_local_provider_calls_v1_chat_completions():
         "choices": [
             {
                 "message": {
-                    "content": "OpenAI-compatible local description."
+                    "content": (
+                        '{"code_intent":"Describes local enrichment.",'
+                        '"description":"OpenAI-compatible local description.",'
+                        '"semantic_labels":["local-inference","chunk-enrichment","semantic-indexing"]}'
+                    )
                 }
             }
         ]
@@ -200,7 +219,11 @@ def test_local_provider_falls_back_to_api_chat_on_404():
     response_200.status_code = 200
     response_200.json.return_value = {
         "message": {
-            "content": "Native Ollama description."
+            "content": (
+                '{"code_intent":"Describes native local enrichment.",'
+                '"description":"Native Ollama description.",'
+                '"semantic_labels":["ollama-inference","chunk-enrichment","semantic-indexing"]}'
+            )
         }
     }
 
@@ -260,7 +283,11 @@ def test_remote_provider_still_uses_chat_completion_request():
             "choices": [
                 {
                     "message": {
-                        "content": "Remote provider description."
+                        "content": (
+                            '{"code_intent":"Describes remote enrichment.",'
+                            '"description":"Remote provider description.",'
+                            '"semantic_labels":["remote-inference","chunk-enrichment","semantic-indexing"]}'
+                        )
                     }
                 }
             ]
@@ -290,7 +317,7 @@ def test_cooldown_triggers_after_n_completed_descriptions(capsys):
     def fake_cleanup():
         cleanup_calls.append(True)
 
-    with patch("rag_ingestion.stages.description._generate_chunk_description", return_value="Desc"), \
+    with patch("rag_ingestion.stages.description._generate_chunk_enrichment", return_value=_enrichment("Desc")), \
          patch("rag_ingestion.config.CODESEEK_DESCRIPTION_COOLDOWN_EVERY", 2), \
          patch("rag_ingestion.config.CODESEEK_DESCRIPTION_COOLDOWN_SECONDS", 5), \
          patch("rag_ingestion.stages.description._sleep", side_effect=fake_sleep), \
@@ -318,7 +345,7 @@ def test_cooldown_disabled_with_zero(capsys):
     def fake_sleep(secs):
         sleep_calls.append(secs)
 
-    with patch("rag_ingestion.stages.description._generate_chunk_description", return_value="Desc"), \
+    with patch("rag_ingestion.stages.description._generate_chunk_enrichment", return_value=_enrichment("Desc")), \
          patch("rag_ingestion.config.CODESEEK_DESCRIPTION_COOLDOWN_EVERY", 0), \
          patch("rag_ingestion.config.CODESEEK_DESCRIPTION_COOLDOWN_SECONDS", 5), \
          patch("rag_ingestion.stages.description._sleep", side_effect=fake_sleep):
@@ -341,7 +368,7 @@ def test_cooldown_disabled_with_seconds_zero(capsys):
     def fake_sleep(secs):
         sleep_calls.append(secs)
 
-    with patch("rag_ingestion.stages.description._generate_chunk_description", return_value="Desc"), \
+    with patch("rag_ingestion.stages.description._generate_chunk_enrichment", return_value=_enrichment("Desc")), \
          patch("rag_ingestion.config.CODESEEK_DESCRIPTION_COOLDOWN_EVERY", 1), \
          patch("rag_ingestion.config.CODESEEK_DESCRIPTION_COOLDOWN_SECONDS", 0), \
          patch("rag_ingestion.stages.description._sleep", side_effect=fake_sleep):
@@ -586,4 +613,3 @@ def test_skips_gitignore():
         content="node_modules/\ndist/\n"
     )
     assert _should_describe_chunk(c) is False
-

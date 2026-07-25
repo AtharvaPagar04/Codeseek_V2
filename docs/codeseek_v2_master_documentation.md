@@ -255,11 +255,11 @@ The engine scans the query string for explicit code signals:
 Retrieval in CodeSeek V2 operates across up to 12 distinct search modes and candidate channels running in parallel or sequence, combining their outputs to prevent missing relevant code:
 
 1. **Dense Vector Search Mode**: Computes high-dimensional cosine similarity between query embeddings and Qdrant chunk vectors using transformer models (e.g. BAAI/bge-small-en-v1.5).
-2. **Lexical BM25 Sparse Search Mode**: Evaluates BM25 keyword scores across indexed file paths, signatures, symbols, metadata labels, and raw source text (with English stopword removal and camelCase/snake_case splitting).
+2. **Lexical BM25 Sparse Search Mode**: Evaluates BM25 keyword scores across indexed file paths, signatures, symbols, code intents, semantic labels, and raw source text (with English stopword removal and camelCase/snake_case splitting).
 3. **Exact Structural Entity Search Mode**: Executes deterministic Qdrant payload queries for exact match candidates based on AST entity identifiers (exact function names, class definitions, variable names, file paths).
-4. **Metadata & Label Filtering Mode**: Filters candidates according to specific structural payload attributes (entity type, language, cyclomatic complexity limits).
+4. **Metadata Filtering Mode**: Filters candidates according to structural payload attributes such as entity type and language.
 5. **Code Topic & Feature Routing Mode**: Evaluates pre-configured topic routes (e.g., authentication handlers, evaluation report APIs, Qdrant upsert logic) to directly fetch known core implementation files and target symbols.
-6. **Domain Boost & Repo Profile Discovery Mode**: Leverages structural repository profiles to identify domain-level candidates based on file role classifications, tags, and dependencies.
+6. **Semantic Boost & Repo Profile Discovery Mode**: Bridges query vocabulary to LLM-generated semantic labels and uses file roles, summaries, code intents, and dependencies to discover candidates.
 7. **Feature Recall & Intent Discovery Mode**: Automatically detects feature location intents and injects candidates based on structural feature matches.
 8. **Framework-Aware Routing Mode**: Identifies software frameworks (FastAPI, React, Express, etc.) and routes queries targeting specific architectural roles (`backend_entrypoint`, `route_registry`, `middleware`, `controller`, `schema`, `migration`) directly to corresponding framework files.
 9. **Dependency Graph & Import Tree Expansion Mode**: Traverses the in-memory knowledge graph to pull imported modules, call dependencies, and parent class declarations.

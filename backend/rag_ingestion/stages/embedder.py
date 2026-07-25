@@ -32,7 +32,7 @@ def _get_provider():
     config = resolve_embedding_config()
     return config, get_embedding_provider(config)
 
-KNOWN_LABELS = {
+KNOWN_METADATA_FIELDS = {
     "File",
     "Language",
     "Type",
@@ -41,7 +41,7 @@ KNOWN_LABELS = {
     "Qualified Symbol",
     "Parent Symbol",
     "Signature",
-    "Labels",
+    "Semantic Labels",
     "Code Intent",
     "Summary",
     "Description",
@@ -241,7 +241,7 @@ def _embedding_input(chunk: Chunk) -> str:
     lines += _line("Qualified Symbol", chunk.qualified_symbol)
     lines += _line("Parent Symbol", chunk.parent_symbol)
     lines += _line("Signature", chunk.signature)
-    lines += _list_line("Labels", getattr(chunk, "labels", []))
+    lines += _list_line("Semantic Labels", getattr(chunk, "semantic_labels", []))
     lines += _line("Code Intent", getattr(chunk, "code_intent", ""))
     lines += _line("Summary", chunk.summary)
     lines += _line("Description", chunk.description)

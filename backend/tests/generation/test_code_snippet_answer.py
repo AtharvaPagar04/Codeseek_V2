@@ -1032,7 +1032,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "symbol_name": "safe_eval_runner_md",
                 "chunk_type": "file_summary",
                 "content_excerpt": "Safe eval runner docs",
-                "labels": ["question_use:code-location"],
+                "semantic_labels": ["source-location"],
                 "retrieval_score": 0.8,
             },
             {
@@ -1041,7 +1041,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
                 "symbol_name": "main",
                 "chunk_type": "function",
                 "content_excerpt": "def main():\n    return None",
-                "labels": ["question_use:code-location", "question_use:implementation"],
+                "semantic_labels": ["source-location", "implementation"],
                 "retrieval_score": 0.4,
             },
         ]

@@ -3,7 +3,6 @@ from retrieval.support.repo_profile import (
     RepoProfile,
     compute_dynamic_boosts_and_penalties,
     build_diagnostics,
-    DOMAIN_SEARCH_TERMS,
     FEATURE_PHRASE_NORMALIZATION
 )
 
@@ -15,7 +14,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
                 "chunk_id": "c1",
                 "relative_path": "backend/auth/auth_service.py",
                 "language": "python",
-                "labels": ["domain:auth", "backend"],
+                "semantic_labels": ["auth", "token-validation"],
                 "symbol_name": "login_user",
                 "qualified_symbol": "backend.auth.auth_service.login_user",
                 "summary": "Handles session token creation and credentials validation.",
@@ -25,7 +24,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
                 "chunk_id": "c2",
                 "relative_path": "backend/rag_ingestion/stages/storage.py",
                 "language": "python",
-                "labels": ["domain:storage", "backend"],
+                "semantic_labels": ["qdrant", "vector-storage"],
                 "symbol_name": "store_chunks",
                 "summary": "Upserts document chunks into Qdrant collection.",
                 "code_intent": "qdrant upsert stages"
@@ -34,7 +33,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
                 "chunk_id": "c3",
                 "relative_path": "frontend/src/components/SessionView.jsx",
                 "language": "javascript",
-                "labels": ["frontend"],
+                "semantic_labels": ["ui-rendering"],
                 "symbol_name": "SessionView",
                 "summary": "React component for displaying evaluation results.",
                 "code_intent": "ui rendering panel"
@@ -43,7 +42,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
                 "chunk_id": "c4",
                 "relative_path": "backend/tests/test_auth.py",
                 "language": "python",
-                "labels": ["tests"],
+                "semantic_labels": ["unit-testing"],
                 "symbol_name": "test_login",
                 "summary": "Unit test suite for authentication flows."
             },
@@ -51,7 +50,7 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
                 "chunk_id": "c5",
                 "relative_path": "docs/architecture.md",
                 "language": "markdown",
-                "labels": ["docs"],
+                "semantic_labels": ["architecture-overview"],
                 "summary": "Overview document of system architecture."
             }
         ]
@@ -95,9 +94,9 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
         _profile_cache["mock_collection"] = self.profile
         
         # 1. Implementation Query: login_user in backend/auth/auth_service.py
-        # Should get domain:auth boost and backend/implementation preferred kind boost, and NO frontend penalty.
+        # Should get semantic auth boost and no frontend penalty.
         item_auth = self.mock_payloads[0]
-        entities = {"boost_labels": ["domain:auth"]}
+        entities = {"boost_semantic_keywords": ["auth", "token-validation"]}
         boost, penalty, details = compute_dynamic_boosts_and_penalties(
             item_auth, "how does login authentication work", entities, "mock_collection"
         )
@@ -137,7 +136,9 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
         from retrieval.support.repo_profile import _profile_cache
         _profile_cache["mock_collection"] = self.profile
         
-        entities = {"boost_labels": ["domain:auth", "domain:storage"]}
+        entities = {
+            "boost_semantic_keywords": ["auth", "token-validation", "vector-storage"]
+        }
         diags = build_diagnostics(
             self.mock_payloads,
             "how does authentication and upsert work",
@@ -146,10 +147,8 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
         )
         
         self.assertTrue(diags["enabled"])
-        self.assertIn("domain:auth", diags["boost_labels"])
-        self.assertIn("domain:storage", diags["boost_labels"])
-        self.assertIn("auth", diags["domain_terms"])
-        self.assertIn("upsert", diags["domain_terms"])
+        self.assertIn("auth", diags["boost_semantic_keywords"])
+        self.assertIn("vector-storage", diags["boost_semantic_keywords"])
         # Should have penalized frontend and tests
         self.assertIn("frontend", diags["source_kind_penalties"])
         self.assertIn("tests", diags["source_kind_penalties"])
@@ -211,4 +210,3 @@ class TestRepoProfileDomainBoost(unittest.TestCase):
         ]
         gated, diag = apply_feature_location_gate("Where is exact hit preservation audited?", sources)
         self.assertNotIn("backend/evals/metrics.py", diag.get("demoted_paths", []))
-

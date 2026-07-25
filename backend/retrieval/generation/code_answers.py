@@ -177,7 +177,7 @@ FLOW_EVIDENCE_MODEL = {
                 "name": "Merge and rerank",
                 "paths": {"backend/retrieval/search/searcher.py"},
                 "symbols": {"_merge_results", "_rerank_with_query_tokens"},
-                "step": "The searcher merges candidate pools and reranks them using query overlap, labels, and path/symbol boosts.",
+                "step": "The searcher merges candidate pools and reranks them using query overlap, semantic labels, and path/symbol boosts.",
                 "required": False,
             },
             {
