@@ -279,7 +279,7 @@ class OpenAICompatibleEmbeddingProvider:
     def embed_query(self, text: str, *, prefix: str = "") -> list[float]:
         return self._embed_batch([f"{prefix}{text}"])[0]
 
-    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def _embed_batch(self, texts: list[str], _retry_count: int = 0) -> list[list[float]]:
         payload: dict[str, object] = {
             "model": self._config.model,
             "input": texts,
@@ -324,11 +324,39 @@ class OpenAICompatibleEmbeddingProvider:
                 detail = f": {safe_text}" if safe_text else ""
             except Exception:
                 detail = ""
-                
+
+            # If the provider failed with 502/503/504 or rate-limit or bad gateway and batch has multiple items, split batch in half
+            if len(texts) > 1 and status in (500, 502, 503, 504, 429, 408):
+                logger.warning(
+                    "[embedding] Batch request of %d items failed with status %d; splitting into sub-batches...",
+                    len(texts),
+                    status,
+                )
+                mid = len(texts) // 2
+                return self._embed_batch(texts[:mid]) + self._embed_batch(texts[mid:])
+
+            # If single item failed on transient error, attempt retry once or twice
+            if len(texts) == 1 and status in (500, 502, 503, 504, 429, 408) and _retry_count < 2:
+                import time
+                time.sleep(1.0 * (_retry_count + 1))
+                return self._embed_batch(texts, _retry_count=_retry_count + 1)
+
             raise EmbeddingRequestError(
                 f"OpenAI-compatible embedding request failed with status {status}{detail}"
             ) from exc
         except Exception as exc:
+            if len(texts) > 1:
+                logger.warning(
+                    "[embedding] Batch request of %d items failed (%s); splitting into sub-batches...",
+                    len(texts),
+                    exc,
+                )
+                mid = len(texts) // 2
+                return self._embed_batch(texts[:mid]) + self._embed_batch(texts[mid:])
+            if len(texts) == 1 and _retry_count < 2:
+                import time
+                time.sleep(1.0 * (_retry_count + 1))
+                return self._embed_batch(texts, _retry_count=_retry_count + 1)
             raise EmbeddingRequestError(
                 _sanitize_message(
                     f"OpenAI-compatible embedding request failed: {exc}",

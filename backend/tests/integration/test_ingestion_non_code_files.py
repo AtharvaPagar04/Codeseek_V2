@@ -309,6 +309,37 @@ class IngestionNonCodeFilesTests(unittest.TestCase):
         self.assertIn("React", summary.detected_frameworks)
         self.assertIn("CODESEEK_DATABASE_URL", summary.env_keys)
 
+    def test_repo_summary_contains_readme_scope_and_directory_tree(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text(
+                "# Demo\nThis project manages repository search and grounded answers.\n",
+                encoding="utf-8",
+            )
+            (root / "backend" / "retrieval").mkdir(parents=True)
+            (root / "backend" / "retrieval" / "searcher.py").write_text("", encoding="utf-8")
+            (root / ".venv").mkdir()
+            readme = Chunk(
+                file_path=str(root / "README.md"),
+                relative_path="README.md",
+                chunk_type="file",
+                purpose="This project manages repository search and grounded answers",
+            )
+
+            summary = build_repo_summary_chunk(
+                [readme],
+                {"repository_name": "demo", "repository_root": str(root)},
+            )
+
+        assert summary is not None
+        self.assertIn("## Project Purpose & Scope", summary.content)
+        self.assertIn("This project manages repository search and grounded answers", summary.content)
+        self.assertIn("## Project Directory Structure", summary.content)
+        self.assertIn("backend/retrieval/searcher.py", summary.content)
+        self.assertNotIn(".venv", summary.content)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -37,7 +37,7 @@ def store_chunks(
     points = [
         PointStruct(
             id=_point_id(chunk),
-            vector=chunk.embedding,
+            vector=chunk.embedding if chunk.embedding else [0.0] * vector_size,
             payload=_payload(chunk),
         )
         for chunk in chunks

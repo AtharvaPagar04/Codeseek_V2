@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
+
+from retrieval.generation.evidence_authority import (
+    canonical_source_path,
+    citation_diagnostics,
+    repair_unsupported_citations,
+    resolve_answer_citations,
+)
 
 LOW_CONTEXT_FALLBACK = (
     "I could not find strong evidence for that in the indexed repository context.\n\n"
@@ -28,7 +34,7 @@ _INTERNAL_PHRASES = (
     "internal score",
 )
 
-_FILE_RE = re.compile(r"`?([A-Za-z0-9_\-/]+\.(?:py|js|jsx|ts|tsx|md))`?")
+_FILE_RE = re.compile(r"`?([A-Za-z0-9_\-/]+\.(?:py|jsx|js|tsx|ts|md))`?")
 _NUMERIC_RE = re.compile(r"\b\d+(?:\.\d+)?(?:ms|s|sec|seconds|minutes|hrs|hours|%)?\b", re.I)
 _VALUE_QUERY_TERMS = (
     "version",
@@ -98,14 +104,45 @@ def validate_generated_answer(
     final_sources: list[dict],
     query_info: dict | None = None,
 ) -> dict:
-    """Validate a generated answer and return a repaired version when possible."""
+    """Validate against sources actually supplied to generation."""
+    resolution = resolve_answer_citations(answer or "", allowed_sources)
+    repaired = repair_unsupported_citations(answer or "", resolution)
+    result = _validate_generated_answer_content(
+        answer=repaired,
+        raw_query=raw_query,
+        response_mode=response_mode,
+        allowed_sources=allowed_sources,
+        final_sources=final_sources,
+        query_info=query_info,
+    )
+    citation_reasons = []
+    if resolution["unsupported"]:
+        citation_reasons.append("unsupported_citation")
+    if resolution["ambiguous"]:
+        citation_reasons.append("ambiguous_citation")
+    result["valid"] = bool(result.get("valid")) and not citation_reasons
+    result["reasons"] = list(result.get("reasons") or []) + citation_reasons
+    result["citation_resolution"] = citation_diagnostics(resolution)
+    return result
+
+
+def _validate_generated_answer_content(
+    *,
+    answer: str,
+    raw_query: str,
+    response_mode: str,
+    allowed_sources: list[dict],
+    final_sources: list[dict],
+    query_info: dict | None = None,
+) -> dict:
+    """Apply the existing response-mode checks after citation repair."""
     response_mode = str(response_mode or "").strip().lower()
     allowed_sources = _dedupe_sources(list(allowed_sources or []))
     final_sources = _dedupe_sources(list(final_sources or []))
     final_sources = _drop_file_level_cards_when_symbol_cards_exist(final_sources)
     allowed_paths = _source_paths(allowed_sources)
     final_paths = _source_paths(final_sources)
-    visible_paths = allowed_paths | final_paths
+    visible_paths = allowed_paths
 
     cleaned_answer, cleaned_reasons = _strip_outside_code_blocks(
         answer or "",
@@ -610,13 +647,19 @@ def _extract_paths(text: str) -> list[str]:
 def _path_is_allowed(path: str, allowed_paths: set[str]) -> bool:
     if not allowed_paths:
         return False
-    path = path.strip()
-    return any(
-        path == allowed
-        or path.endswith("/" + allowed)
-        or allowed.endswith("/" + path)
-        for allowed in allowed_paths
-    )
+    path = canonical_source_path(path)
+    canonical_allowed = {
+        item
+        for value in allowed_paths
+        if (item := canonical_source_path(value))
+    }
+    if not path:
+        return False
+    if path in canonical_allowed:
+        return True
+    if "/" in path:
+        return False
+    return sum(value.rsplit("/", 1)[-1] == path for value in canonical_allowed) == 1
 
 
 def _answer_mentions_allowed_paths(answer: str, allowed_paths: set[str]) -> bool:
@@ -631,7 +674,11 @@ def _answer_mentions_only_allowed_paths(answer: str, allowed_paths: set[str]) ->
 
 
 def _source_paths(sources: list[dict]) -> set[str]:
-    return {str(src.get("relative_path", "")).strip() for src in sources if str(src.get("relative_path", "")).strip()}
+    return {
+        path
+        for src in sources
+        if (path := canonical_source_path(src.get("relative_path")))
+    }
 
 
 def _dedupe_sources(sources: list[dict]) -> list[dict]:

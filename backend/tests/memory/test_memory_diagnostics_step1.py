@@ -49,8 +49,8 @@ def test_run_query_emits_step1_memory_diagnostics() -> None:
         "has_valid_referent": True,
         "follow_up_to": "show me _require_auth",
         "follow_up_resolved_to": "show me _require_auth",
-        "followup_hint": "backend/retrieval/api_service.py::_require_auth",
-        "rewrite_mode": "soft_hint",
+        "followup_anchor": "backend/retrieval/api_service.py::_require_auth",
+        "rewrite_mode": "anaphora_resolution",
         "rewrite_anchor": "show me _require_auth",
         "query_rewritten": False,
     }
@@ -96,7 +96,7 @@ def test_run_query_emits_step1_memory_diagnostics() -> None:
     assert diagnostics["memory"]["has_valid_referent"] is True
     assert diagnostics["rewrite"]["query_rewritten"] is False
     assert diagnostics["rewrite"]["rewrite_anchor"] == "show me _require_auth"
-    assert diagnostics["rewrite"]["rewrite_mode"] == "soft_hint"
+    assert diagnostics["rewrite"]["rewrite_mode"] == "anaphora_resolution"
     assert diagnostics["retrieval"]["previous_candidates_injected"] == 0
     assert diagnostics["retrieval"]["exact_hit"] is True
     assert diagnostics["retrieval"]["multi_layer_hit"] is True

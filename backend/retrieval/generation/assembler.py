@@ -1,6 +1,7 @@
 """Assemble final LLM context from retrieved chunks."""
 
 from functools import lru_cache
+from html import escape
 from pathlib import Path
 import re
 
@@ -58,11 +59,11 @@ def assemble(
     block_records: list[dict] = []
     used = 0
 
-    for chunk in ranked:
+    for order, chunk in enumerate(ranked, start=1):
         content = _read_chunk_content(chunk)
         if content is None:
             continue
-        block = _format_block(chunk, content)
+        block = _format_block(chunk, content, order=order)
         block_tokens = len(_enc.encode(block))
         if used + block_tokens > budget and chunk.get("expansion_type") != "primary":
             continue
@@ -148,11 +149,11 @@ def assemble_for_reasoning(
     block_records: list[dict] = []
     used = 0
 
-    for chunk in ranked:
+    for order, chunk in enumerate(ranked, start=1):
         content = _read_chunk_content(chunk)
         if content is None:
             continue
-        block = _format_block(chunk, content)
+        block = _format_block(chunk, content, order=order)
         block_tokens = len(_enc.encode(block))
         if used + block_tokens > budget and chunk.get("expansion_type") != "primary":
             continue
@@ -357,7 +358,7 @@ def _read_chunk_content(chunk: dict) -> str | None:
     return "".join(lines[start:end])
 
 
-def _format_block(chunk: dict, content: str) -> str:
+def _format_block(chunk: dict, content: str, *, order: int | None = None) -> str:
     label = chunk.get("expansion_type", "primary")
     symbol = chunk.get("symbol_name") or "<file>"
     header = (
@@ -379,9 +380,35 @@ def _format_block(chunk: dict, content: str) -> str:
         lines.append('<metadata hidden="true">')
         lines.extend(metadata_lines)
         lines.append("</metadata>")
+    flow_edge = chunk.get("graph_edge") or chunk.get("edge") or {}
+    if not isinstance(flow_edge, dict):
+        flow_edge = {}
+    caller = chunk.get("caller_symbol") or flow_edge.get("caller_symbol") or flow_edge.get("source_symbol")
+    callee = chunk.get("callee_symbol") or flow_edge.get("callee_symbol") or flow_edge.get("target_symbol")
+    has_flow_metadata = (
+        label not in {"", "primary"}
+        or bool(caller and callee)
+        or bool(chunk.get("graph_edge_type") or chunk.get("edge_type") or flow_edge)
+    )
+    if has_flow_metadata:
+        flow_order = order if order is not None else chunk.get("flow_order", 1)
+        attributes = [
+            f'order="{escape(str(flow_order), quote=True)}"',
+            f'role="{escape(str(label), quote=True)}"',
+        ]
+        if caller and callee:
+            attributes.extend(
+                [
+                    f'caller="{escape(str(caller), quote=True)}"',
+                    f'callee="{escape(str(callee), quote=True)}"',
+                ]
+            )
+        lines.append(f"<flow_step {' '.join(attributes)}>")
     lines.append("<source_code>")
     lines.append(content.rstrip())
     lines.append("</source_code>")
+    if has_flow_metadata:
+        lines.append("</flow_step>")
     return "\n".join(lines)
 
 
@@ -397,6 +424,7 @@ def _truncate_to_budget(text: str, remaining_tokens: int) -> str:
 
 def _source_record(chunk: dict) -> dict:
     return {
+        "chunk_id": chunk.get("chunk_id", ""),
         "relative_path": chunk.get("relative_path", ""),
         "symbol_name": chunk.get("symbol_name", ""),
         "qualified_symbol": chunk.get("qualified_symbol", ""),

@@ -5,19 +5,26 @@
 ## Execution Flow
 
 1. Load thread history and prior entities.
-2. Process the query into intent, entities, files, symbols, and search hints.
-3. Retrieve candidates from enabled search layers.
-4. Run graph retrieval diagnostics or active expansion when configured.
-5. Expand calls, parents, split parts, and eligible related chunks.
-6. Prune and assemble token-bounded context.
-7. Select separate display and reasoning source sets.
-8. Route to a deterministic answer builder or the LLM.
-9. Post-process the answer and enforce grounding safeguards.
-10. Persist messages, memory state, metrics, and retrieval traces.
+2. Resolve eligible anaphoric follow-ups to a concrete retrieval query.
+3. Extract entities and classify intent from that resolved query.
+4. Route `OUT_OF_SCOPE` requests directly to conversational generation, without
+   collection validation, Qdrant, or other retrieval work.
+5. For repository requests, retrieve candidates from enabled search layers.
+6. Run graph retrieval diagnostics or active expansion when configured.
+7. Expand calls, parents, split parts, and eligible related chunks.
+8. Prune and assemble token-bounded context.
+9. Select separate display and reasoning source sets.
+10. Route to a deterministic answer builder or the grounded LLM.
+11. Post-process the answer and enforce grounding safeguards.
+12. Persist messages, memory state, metrics, and retrieval traces.
 
 ## Answer Routes
 
-The current router can produce low-context, documentation summary, file summary, code excerpt, architecture summary, repository overview, flow summary, source location, symbol deep-dive, portfolio-grounded, or LLM-generated responses.
+The current router can produce conversational chitchat, low-context,
+documentation summary, file summary, code excerpt, architecture summary,
+repository overview, flow summary, source location, symbol deep-dive,
+portfolio-grounded, or LLM-generated responses. Conversational chitchat is
+only used for low-confidence requests without an explicit repository target.
 
 Explanation requests use the standard LLM path. Deterministic explanation code remains only as fallback code.
 

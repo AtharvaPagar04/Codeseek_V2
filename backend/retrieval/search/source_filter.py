@@ -2,13 +2,13 @@
 
 Two-layer source model
 ----------------------
-display_sources   — strict citation set, max DISPLAY_SOURCES_CAP (6).
-                    Shown to the user as source cards.
-                    Injected into the LLM prompt as the ALLOWED SOURCES list.
+display_sources   — presentation-priority set, max DISPLAY_SOURCES_CAP (6).
+                    Shown to the user as source cards unless final citations
+                    promote additional reasoning evidence.
 reasoning_sources — broader synthesis set, max REASONING_SOURCES_CAP (12).
                     Must be a superset of display_sources.
                     Used to assemble the CODE CONTEXT block passed to the LLM.
-                    Never cited directly unless promoted into display_sources.
+                    Sources actually assembled into context form the citation allowlist.
 
 When RETRIEVAL_ENABLE_TWO_LAYER_SOURCES=0 (or the flag is absent and disabled),
 both lists collapse to the same single-list behaviour as before.
@@ -134,11 +134,6 @@ def _source_contract_intent(raw_query: str) -> str:
     from retrieval.query.query_intent import classify_source_intent
 
     return classify_source_intent(raw_query)
-
-
-def _source_contract_paths(raw_query: str) -> tuple[str, ...]:
-    del raw_query
-    return ()
 
 
 def _path_has_any(path: str, terms: tuple[str, ...]) -> bool:
@@ -1195,14 +1190,15 @@ def split_sources_two_layer(
     """Return (display_sources, reasoning_sources) implementing the two-layer model.
 
     display_sources
-        Strict citation set capped at DISPLAY_SOURCES_CAP (default 6).
+        Presentation-priority set capped at DISPLAY_SOURCES_CAP (default 6).
         Derived from select_sources_for_display().
-        Used for user-facing source cards and the LLM ALLOWED SOURCES list.
+        Used for initial user-facing source cards.
 
     reasoning_sources
         Broader synthesis set capped at REASONING_SOURCES_CAP (default 12).
         Always a superset of display_sources.
-        Provides extra context for LLM synthesis without relaxing citation safety.
+        Provides extra context for LLM synthesis. Assembled reasoning evidence may
+        be cited and promoted into final display sources.
 
     When enabled=False both lists are identical to display_sources (legacy behaviour).
     """

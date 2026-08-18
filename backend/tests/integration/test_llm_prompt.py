@@ -17,6 +17,9 @@ class LlmPromptTests(unittest.TestCase):
         self.assertIn("Do not invent file paths, class names, functions, endpoints, behavior, or architectural patterns", SYSTEM_PROMPT)
         self.assertIn("The provided code context does not contain enough information to answer this.", SYSTEM_PROMPT)
         self.assertIn("It cannot introduce facts absent from the current <target_repository_context>.", SYSTEM_PROMPT)
+        self.assertIn("### STRICT NEGATIVE GROUNDING", SYSTEM_PROMPT)
+        self.assertIn("This feature is not implemented in this repository.", SYSTEM_PROMPT)
+        self.assertIn("DO NOT provide general definitions, textbook explanations", SYSTEM_PROMPT)
 
     def test_system_prompt_treats_ast_metadata_as_background_context(self) -> None:
         self.assertIn("Do not output or summarize raw AST metadata blocks", SYSTEM_PROMPT)
@@ -48,6 +51,28 @@ class LlmPromptTests(unittest.TestCase):
         self.assertIn("<source_code>", block)
         self.assertIn("</source_code>", block)
         self.assertLess(block.index("</metadata>"), block.index("<source_code>"))
+
+    def test_assembler_adds_flow_step_for_expansion_metadata(self) -> None:
+        block = _format_block(
+            {
+                "relative_path": "app.py",
+                "symbol_name": "load_config",
+                "chunk_type": "function",
+                "start_line": 10,
+                "end_line": 12,
+                "expansion_type": "callee",
+                "caller_symbol": "run",
+                "callee_symbol": "load_config",
+            },
+            "def load_config():\n    return {}\n",
+            order=2,
+        )
+
+        self.assertIn(
+            '<flow_step order="2" role="callee" caller="run" callee="load_config">',
+            block,
+        )
+        self.assertLess(block.index("<flow_step"), block.index("<source_code>"))
 
     def test_code_prompt_preserves_exact_code_identifiers(self) -> None:
         prompt = _build_prompt(
@@ -204,6 +229,32 @@ class LlmPromptTests(unittest.TestCase):
         self.assertIn("--- RESPONSE MODE: USAGE_EXAMPLE ---", prompt)
         self.assertIn("The user wants to see how to call or use this symbol", prompt)
         self.assertIn("Write a new, standalone example that calls the target symbol", prompt)
+
+    def test_feature_and_architecture_explanation_modes_add_grounding_note(self) -> None:
+        for response_mode in ("feature_explanation", "architecture_explanation"):
+            prompt = _build_prompt(
+                raw_query="Explain the requested feature",
+                context="def implemented_feature(): pass",
+                history_block="",
+                allowed_sources=[],
+                response_mode=response_mode,
+            )
+            note = "[SYSTEM NOTE: Verify feature existence in code context before explaining. Do not hallucinate missing features.]"
+            self.assertIn(note, prompt)
+            self.assertLess(prompt.index(note), prompt.index("<target_repository_context>"))
+
+    def test_weak_flow_prompt_uses_grounding_override(self) -> None:
+        prompt = _build_prompt(
+            raw_query="trace the requested flow",
+            context="unrelated snippet",
+            history_block="",
+            allowed_sources=[],
+            response_mode="flow_summary",
+            evidence_confidence="weak",
+        )
+
+        self.assertIn("[SYSTEM OVERRIDE: Evidence is weak. Do not explain the flow.", prompt)
+        self.assertNotIn("Aim for 600–1200 words", prompt)
 
 
 if __name__ == "__main__":

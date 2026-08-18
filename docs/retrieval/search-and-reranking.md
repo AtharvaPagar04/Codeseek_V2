@@ -39,11 +39,15 @@ The base score is:
 ```text
 0.70 * vector_score
 + 0.15 * exact_match_score
-+ 0.10 * label_boost
 + 0.05 * path_symbol_boost
 ```
 
-Intent-specific source, symbol, content, role, structural, conversation, and repository-profile adjustments are then applied. Lexical-only candidates receive a bounded synthetic vector score of `min(0.40, 0.20 + 2.0 * fusion_score)`.
+After the base score, a candidate is multiplied by `1.0 + 0.20` for each
+overlap between its LLM-generated `semantic_labels` and the query's structured
+semantic-label hints. Intent-specific source, symbol, content, role,
+structural, conversation, and repository-profile adjustments are then applied.
+Lexical-only candidates receive a bounded synthetic vector score of
+`min(0.40, 0.20 + 2.0 * fusion_score)`.
 
 Behavior queries penalize generic logging, configuration, settings, display, and error-support files by `-0.75` unless that support domain is explicitly requested. Overview queries boost README, documentation, entrypoint, and configuration evidence.
 

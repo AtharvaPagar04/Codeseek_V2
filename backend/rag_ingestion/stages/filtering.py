@@ -1,10 +1,17 @@
 """File filtering stage."""
 
 import fnmatch
+import re
 from pathlib import Path
 
 from rag_ingestion.models.file import FileRecord
 from rag_ingestion.utils.counters import PipelineCounters
+
+
+_VIRTUAL_ENV_DIR_RE = re.compile(
+    r"^\.?venv(?:(?:[-_]?3[._-]?\d{2})|(?:[-_]?\d{3}))?$",
+    re.IGNORECASE,
+)
 
 
 IGNORE_DIRS = {
@@ -146,6 +153,17 @@ IGNORE_PATTERNS = {
 }
 
 
+def is_virtual_environment_dir(name: str) -> bool:
+    """Return whether a basename is a conventional Python environment name."""
+    normalized = name.strip()
+    return normalized.lower() == "env" or bool(_VIRTUAL_ENV_DIR_RE.fullmatch(normalized))
+
+
+def is_ignored_directory_name(name: str) -> bool:
+    """Return whether a directory basename is excluded before file discovery."""
+    return name in IGNORE_DIRS or is_virtual_environment_dir(name)
+
+
 def filter_files(
     files: list[FileRecord], repo_root: str, counters: PipelineCounters
 ) -> list[FileRecord]:
@@ -182,7 +200,7 @@ def _is_system_ignored(file: FileRecord) -> bool:
     path = Path(file.relative_path)
     parts = set(path.parts)
 
-    if parts & IGNORE_DIRS:
+    if any(is_ignored_directory_name(part) for part in parts):
         return True
 
     if path.name in IGNORE_FILENAMES:

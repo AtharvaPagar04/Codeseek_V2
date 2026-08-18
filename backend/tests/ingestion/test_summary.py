@@ -3,6 +3,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from rag_ingestion.models.chunk import Chunk
+from rag_ingestion.models.file import FileRecord
+from rag_ingestion.models.parsed import ParsedFile
+from rag_ingestion.stages.chunker import generate_chunks
 from rag_ingestion.stages.summary import (
     _structured_file_summary,
     _detect_frameworks,
@@ -10,6 +13,31 @@ from rag_ingestion.stages.summary import (
 
 
 class SummaryExtractionTests(unittest.TestCase):
+    def test_logging_config_extracts_levels_handlers_and_files(self) -> None:
+        content = """
+import logging
+from logging.handlers import RotatingFileHandler
+
+handler = RotatingFileHandler(filename="logs/trading.log")
+handler.setLevel(logging.INFO)
+stream = logging.StreamHandler()
+level = "DEBUG"
+"""
+        chunk = Chunk(
+            relative_path="bot/logging_config.py",
+            chunk_type="file",
+            content=content,
+        )
+
+        _structured_file_summary(chunk)
+
+        self.assertIn("Log Level: INFO", chunk.summary_facts)
+        self.assertIn("Log Level: DEBUG", chunk.summary_facts)
+        self.assertIn("Handler: RotatingFileHandler", chunk.summary_facts)
+        self.assertIn("Handler: StreamHandler", chunk.summary_facts)
+        self.assertIn("File: logs/trading.log", chunk.summary_facts)
+        self.assertIn("Logging configuration:", chunk.summary)
+
     def test_readme_purpose_ignores_noise(self) -> None:
         content = (
             "# CodeSeek\n"
@@ -242,6 +270,63 @@ ENABLE_BILLING=true
         self.assertEqual(chunk.env_keys, ["PORT", "STRIPE_API_KEY", "STRIPE_WEBHOOK_SECRET", "ENABLE_BILLING"])
         self.assertEqual(chunk.feature_flags, ["ENABLE_BILLING"])
         self.assertEqual(chunk.provider_keys, ["STRIPE_API_KEY", "STRIPE_WEBHOOK_SECRET"])
+
+    def test_env_example_extraction_adds_python_usage_context(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env_path = root / ".env.example"
+            client_path = root / "bot" / "client.py"
+            env_path.write_text("BINANCE_API_KEY=\nRETRIEVAL_ENABLE_LEXICAL=1\n", encoding="utf-8")
+            client_path.parent.mkdir()
+            client_path.write_text(
+                'import os\nAPI_KEY = os.getenv("BINANCE_API_KEY")\n',
+                encoding="utf-8",
+            )
+            chunk = Chunk(
+                file_path=str(env_path),
+                relative_path=".env.example",
+                chunk_type="file",
+                content=env_path.read_text(encoding="utf-8"),
+            )
+
+            _structured_file_summary(chunk)
+
+        usage_facts = " ".join(chunk.summary_facts)
+        self.assertEqual(chunk.env_keys, ["BINANCE_API_KEY"])
+        self.assertNotIn("RETRIEVAL_ENABLE_LEXICAL", usage_facts)
+        self.assertIn("BINANCE_API_KEY: Referenced in bot/client.py", usage_facts)
+        self.assertIn('os.getenv("BINANCE_API_KEY")', usage_facts)
+
+    def test_env_chunk_content_prunes_unused_keys(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env_path = root / ".env.example"
+            env_path.write_text(
+                "USED_KEY=secret\nUNUSED_KEY=boilerplate\n",
+                encoding="utf-8",
+            )
+            (root / "app.py").write_text(
+                'import os\nvalue = os.getenv("USED_KEY")\n',
+                encoding="utf-8",
+            )
+            file = FileRecord(
+                path=str(env_path),
+                relative_path=".env.example",
+                extension=".example",
+                size_bytes=env_path.stat().st_size,
+            )
+            parsed = ParsedFile(
+                relative_path=".env.example",
+                language="text",
+                parse_status="failed",
+            )
+
+            chunks = generate_chunks(parsed, file)
+
+        self.assertEqual(len(chunks), 1)
+        self.assertIn("USED_KEY=", chunks[0].content)
+        self.assertNotIn("UNUSED_KEY", chunks[0].content)
+        self.assertNotIn("boilerplate", chunks[0].content)
 
     def test_detect_frameworks_scoped_packages(self) -> None:
         names = [

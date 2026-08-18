@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import tomllib
 from pathlib import Path
 
 from rag_ingestion.models.chunk import Chunk
+from rag_ingestion.stages.filtering import is_virtual_environment_dir
 
 
 def generate_summary(chunk: Chunk) -> str:
@@ -65,6 +67,8 @@ def _structured_file_summary(chunk: Chunk) -> str:
         _extract_docker_compose_metadata(chunk, content)
     elif filename == "dockerfile":
         _extract_dockerfile_metadata(chunk, content)
+    elif filename in ("logging_config.py", "log_config.py", "logging.py", "logger.py") or "logging" in filename:
+        _extract_logging_metadata(chunk, content)
     elif (filename.endswith(".env.example") or filename == ".env.example" or
           (filename.startswith(".env") and (filename.endswith(".example") or "example" in filename))):
         _extract_env_example_metadata(chunk, content)
@@ -97,6 +101,52 @@ def _structured_file_summary(chunk: Chunk) -> str:
         _extract_generic_config_metadata(chunk, content)
         
     return " | ".join(chunk.summary_facts[:8])
+
+
+def _extract_logging_metadata(chunk: Chunk, content: str) -> None:
+    """Extract searchable, repository-grounded facts from logging modules."""
+    levels = _dedupe(
+        match.upper()
+        for match in re.findall(
+            r"logging\.(DEBUG|INFO|WARNING|ERROR|CRITICAL|FATAL)\b"
+            r"|\blevel\s*=\s*['\"](DEBUG|INFO|WARNING|ERROR|CRITICAL|FATAL)['\"]",
+            content,
+            flags=re.IGNORECASE,
+        )
+        for match in (match if isinstance(match, tuple) else (match,))
+        if match
+    )
+    handlers = _dedupe(
+        match
+        for match in re.findall(
+            r"\b(RotatingFileHandler|TimedRotatingFileHandler|FileHandler|"
+            r"StreamHandler|SysLogHandler|SMTPHandler|NullHandler)\b",
+            content,
+        )
+    )
+    file_paths = _dedupe(
+        match.strip()
+        for match in re.findall(
+            r"\bfilename\s*=\s*['\"]([^'\"]+)['\"]|"
+            r"['\"]([^'\"]*(?:\.log\b|logs/)[^'\"]*)['\"]",
+            content,
+            flags=re.IGNORECASE,
+        )
+        for match in (match if isinstance(match, tuple) else (match,))
+        if match
+    )
+    facts = [
+        *(f"Log Level: {level}" for level in levels),
+        *(f"Handler: {handler}" for handler in handlers),
+        *(f"File: {path}" for path in file_paths),
+    ]
+    if not facts:
+        return
+
+    facts = _dedupe(facts)
+    sentence = "Logging configuration: " + "; ".join(facts)
+    chunk.summary_facts = _dedupe(chunk.summary_facts + facts + [sentence])
+    chunk.summary = f"{sentence}. {chunk.summary}".strip()
 
 
 def _is_noise_readme_line(line: str) -> bool:
@@ -461,24 +511,114 @@ def _extract_dockerfile_metadata(chunk: Chunk, content: str) -> None:
 
 def _extract_env_example_metadata(chunk: Chunk, content: str) -> None:
     chunk.file_type = "env_example"
-    keys = []
-    for line in content.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key = stripped.split("=", 1)[0].strip()
-        keys.append(key)
-    chunk.env_keys = _dedupe(keys)
+    keys = _extract_env_keys(content)
+    usage = _environment_usage_map(chunk.file_path, keys)
+    # Ingestion chunks always carry file_path; retain pathless unit fixtures
+    # until they can be associated with a repository scan.
+    chunk.env_keys = (
+        [key for key in keys if key in usage]
+        if chunk.file_path
+        else keys
+    )
     chunk.feature_flags = [key for key in chunk.env_keys if key.endswith(("_ENABLED", "_ENABLE")) or "ENABLE" in key or "FEATURE" in key]
     chunk.provider_keys = [key for key in chunk.env_keys if any(term in key for term in ("API_KEY", "TOKEN", "SECRET", "PASSWORD"))]
     if chunk.env_keys:
         chunk.summary_facts.append(f"Environment keys: {', '.join(chunk.env_keys[:8])}")
+        chunk.summary_facts.extend(
+            f"{key}: {usage[key]}" for key in chunk.env_keys if key in usage
+        )
     if chunk.feature_flags:
         chunk.summary_facts.append(f"Feature flags: {', '.join(chunk.feature_flags[:8])}")
     if chunk.provider_keys:
         chunk.summary_facts.append(f"Provider/secret keys: {', '.join(chunk.provider_keys[:8])}")
 
 
+def _extract_env_keys(content: str) -> list[str]:
+    keys: list[str] = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if key:
+            keys.append(key)
+    return _dedupe(keys)
+
+
+def build_env_usage_content(file_path: str, content: str) -> str:
+    """Replace dotenv boilerplate with only code-referenced keys and context."""
+    keys = _extract_env_keys(content)
+    usage = _environment_usage_map(file_path, keys)
+    lines = ["Environment keys referenced by Python code:"]
+    for key in keys:
+        if key not in usage:
+            continue
+        reference = usage[key].removeprefix("Referenced in ")
+        lines.append(f"{key}= (Used in: {reference})")
+    if len(lines) == 1:
+        lines.append("(none)")
+    return "\n".join(lines)
+
+
+def _environment_usage_map(file_path: str, keys: list[str]) -> dict[str, str]:
+    """Find the first grounded Python reference for each environment key."""
+    if not file_path or not keys:
+        return {}
+    env_path = Path(file_path)
+    if not env_path.exists():
+        return {}
+
+    root = env_path.parent
+    for parent in (env_path.parent, *env_path.parent.parents):
+        if parent == Path("/tmp"):
+            break
+        if (parent / ".git").is_dir():
+            root = parent
+            break
+        if parent == Path(parent.anchor):
+            break
+
+    usage: dict[str, str] = {}
+    excluded = {
+        ".git",
+        "__pycache__",
+        "node_modules",
+        ".idea",
+        ".vscode",
+    }
+    patterns = {
+        key: re.compile(rf"(?<![A-Z0-9_]){re.escape(key)}(?![A-Z0-9_])")
+        for key in keys
+    }
+    for current, directories, filenames in os.walk(root, followlinks=False):
+        directories[:] = sorted(
+            name for name in directories
+            if name not in excluded
+            and not is_virtual_environment_dir(name)
+            and not (Path(current) / name).is_symlink()
+        )
+        for filename in sorted(filenames):
+            if not filename.endswith(".py"):
+                continue
+            source_path = Path(current) / filename
+            try:
+                if source_path.is_symlink():
+                    continue
+                source_lines = source_path.read_text(
+                    encoding="utf-8", errors="ignore"
+                ).splitlines()
+            except OSError:
+                continue
+            relative_path = source_path.relative_to(root).as_posix()
+            for line_number, line in enumerate(source_lines, start=1):
+                for key, pattern in patterns.items():
+                    if key in usage or not pattern.search(line):
+                        continue
+                    code_context = " ".join(line.strip().split())[:180]
+                    usage[key] = (
+                        f"Referenced in {relative_path}:{line_number} ({code_context})"
+                    )
+    return usage
 def _clean_json_comments(text: str) -> str:
     # remove single-line comments // ...
     text = re.sub(r'//.*', '', text)

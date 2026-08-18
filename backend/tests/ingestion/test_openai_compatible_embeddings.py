@@ -169,3 +169,44 @@ def test_http_status_error_extracts_and_sanitizes_body(monkeypatch: pytest.Monke
     assert "*****" in str(exc_info.value)
     assert "Invalid model" in str(exc_info.value)
     assert "status 400" in str(exc_info.value)
+
+
+def test_502_bad_gateway_splits_subbatches(monkeypatch: pytest.MonkeyPatch):
+    calls = []
+
+    class FakeResponse:
+        status_code = 502
+        text = "Bad Gateway"
+
+        def json(self):
+            raise ValueError("No JSON")
+
+    class FakeStatusError(httpx.HTTPStatusError):
+        def __init__(self):
+            self.response = FakeResponse()
+            super().__init__("502 Bad Gateway", request=None, response=self.response)
+
+    def fake_post(url, *, headers, json, timeout):
+        inp = list(json["input"])
+        calls.append(inp)
+        if len(inp) > 1:
+            raise FakeStatusError()
+        # Single items succeed
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"data": [{"index": 0, "embedding": [0.5, 0.5]}]},
+        )
+
+    monkeypatch.setattr("retrieval.support.embedding_provider.httpx.post", fake_post)
+    provider = OpenAICompatibleEmbeddingProvider(_cloud_config(batch_size=4))
+
+    vectors = provider.embed_texts(["a", "b", "c", "d"])
+
+    assert len(vectors) == 4
+    # The batch of 4 failed with 502, so it split into [a, b] and [c, d], which failed with 502, so split into individual items
+    assert ["a", "b", "c", "d"] in calls
+    assert ["a", "b"] in calls
+    assert ["c", "d"] in calls
+    assert ["a"] in calls
+    assert ["b"] in calls
+

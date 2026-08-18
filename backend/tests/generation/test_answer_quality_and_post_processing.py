@@ -97,7 +97,7 @@ class TestAnswerQualityAndPostProcessing(unittest.TestCase):
         
         # Verify proxy stored the post-processed version
         self.assertEqual(proxy.last_answer, "This is a in `backend/retrieval/api_service.py`.")
-        self.assertEqual(len(proxy.last_sources), 1)
+        self.assertEqual(len(proxy.last_sources), 2)
         self.assertEqual(proxy.last_sources[0]["relative_path"], "backend/retrieval/api_service.py")
         
         # Verify real memory received the post-processed version

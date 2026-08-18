@@ -56,6 +56,9 @@ LAYOUT_QUERY_TERMS = {"layout", "root", "metadata", "shell", "head", "html", "bo
 PAGE_ENTRY_QUERY_TERMS = {"home", "homepage", "landing", "entry", "root", "page", "app"}
 GRAPH_RETRIEVAL_MODE_STANDARD = "standard"
 GRAPH_RETRIEVAL_MODE_ASSIST = "graph_assist"
+GRAPH_MAX_HOPS = 2
+GRAPH_MAX_NEIGHBORS_PER_CANDIDATE = 3
+GRAPH_DECAY_FACTORS = {0: 1.0, 1: 0.8, 2: 0.5}
 
 
 @dataclass(frozen=True)
@@ -100,7 +103,10 @@ def run_graph_shadow_retrieval(
     edge_types_tuple = tuple(edge_types or config.get("edge_types") or SAFE_DEFAULT_EDGE_TYPES)
     max_anchors_value = _positive_int(max_anchors, int(config.get("max_anchors") or 5))
     max_expanded_value = _positive_int(max_expanded, int(config.get("max_expanded") or 20))
-    max_per_anchor_value = _positive_int(max_per_anchor, int(config.get("max_per_anchor") or 4))
+    max_per_anchor_value = min(
+        GRAPH_MAX_NEIGHBORS_PER_CANDIDATE,
+        _positive_int(max_per_anchor, int(config.get("max_per_anchor") or 4)),
+    )
     started = time.perf_counter()
 
     if not shadow_enabled:
@@ -142,7 +148,7 @@ def run_graph_shadow_retrieval(
             resolved_session_id,
             anchors,
             edge_types=edge_types_tuple,
-            max_depth=1,
+            max_depth=GRAPH_MAX_HOPS,
             max_expanded=max_expanded_value,
             max_per_anchor=max_per_anchor_value,
             query=query,
@@ -344,8 +350,8 @@ def expand_graph_shadow_candidates(
     max_per_anchor: int = 4,
     query: str | None = None,
 ) -> dict:
-    """Expand graph anchors by one hop and return diagnostics only."""
-    max_depth = 1
+    """Expand graph anchors by at most two bounded hops for flow tracing."""
+    max_depth = min(GRAPH_MAX_HOPS, max(1, int(max_depth or 1)))
     allowed_edge_types = {edge_type.strip() for edge_type in edge_types if str(edge_type).strip()}
     if not allowed_edge_types:
         allowed_edge_types = set(SAFE_DEFAULT_EDGE_TYPES)
@@ -363,63 +369,92 @@ def expand_graph_shadow_candidates(
     total_candidates_considered = 0
 
     for anchor in anchors:
-        scan_nodes = _scan_nodes_for_anchor(session_id, anchor)
-        for scan_node in scan_nodes:
-            edges = _edges_for_node(session_id, scan_node["id"], scan_edge_types)
-            outgoing_import_count = _outgoing_import_count(edges, scan_node["id"])
-            incoming_import_count = _incoming_import_count(edges, scan_node["id"])
-            for edge in edges:
-                if edge["edge_type"] == UNRESOLVED_IMPORT_EDGE_TYPE:
-                    if edge.get("source_node_id") == scan_node["id"]:
-                        unresolved_imports_by_id.setdefault(
-                            edge["id"],
-                            _unresolved_import_diagnostic(edge, anchor),
+        frontier = _scan_nodes_for_anchor(session_id, anchor)
+        visited_scan_nodes: set[str] = set()
+        for depth in range(1, max_depth + 1):
+            next_frontier: list[dict] = []
+            next_frontier_ids: set[str] = set()
+            for scan_node in frontier:
+                scan_node_id = str(scan_node.get("id") or "")
+                if not scan_node_id or scan_node_id in visited_scan_nodes:
+                    continue
+                visited_scan_nodes.add(scan_node_id)
+                edges = _edges_for_node(session_id, scan_node_id, scan_edge_types)
+                outgoing_import_count = _outgoing_import_count(edges, scan_node_id)
+                incoming_import_count = _incoming_import_count(edges, scan_node_id)
+                neighbors_added = 0
+                for edge in edges:
+                    if edge["edge_type"] == UNRESOLVED_IMPORT_EDGE_TYPE:
+                        if edge.get("source_node_id") == scan_node_id:
+                            unresolved_imports_by_id.setdefault(
+                                edge["id"],
+                                _unresolved_import_diagnostic(edge, anchor),
+                            )
+                        continue
+
+                    if edge["edge_type"] not in allowed_edge_types:
+                        continue
+
+                    neighbor_id = _neighbor_id(edge, scan_node_id)
+                    if not neighbor_id or neighbor_id == anchor.node_id:
+                        continue
+                    neighbor = _get_graph_node(session_id, neighbor_id)
+                    if not neighbor:
+                        continue
+                    if (
+                        depth < max_depth
+                        and neighbor_id not in visited_scan_nodes
+                        and neighbor_id not in next_frontier_ids
+                        and neighbors_added < GRAPH_MAX_NEIGHBORS_PER_CANDIDATE
+                    ):
+                        next_frontier.append(neighbor)
+                        next_frontier_ids.add(neighbor_id)
+
+                    if neighbor.get("node_type") == "external_package":
+                        external_packages_by_id.setdefault(
+                            neighbor["id"],
+                            _external_package_diagnostic(neighbor, edge, anchor),
                         )
-                    continue
+                        continue
 
-                if edge["edge_type"] not in allowed_edge_types:
-                    continue
+                    if neighbor.get("node_type") not in ANSWER_CANDIDATE_NODE_TYPES:
+                        continue
 
-                neighbor_id = _neighbor_id(edge, scan_node["id"])
-                if not neighbor_id or neighbor_id == anchor.node_id:
-                    continue
-                neighbor = _get_graph_node(session_id, neighbor_id)
-                if not neighbor:
-                    continue
-
-                if neighbor.get("node_type") == "external_package":
-                    external_packages_by_id.setdefault(
-                        neighbor["id"],
-                        _external_package_diagnostic(neighbor, edge, anchor),
+                    expanded = _expanded_node_diagnostic(
+                        neighbor, edge, anchor, scan_node_id, expansion_depth=depth
                     )
-                    continue
-
-                if neighbor.get("node_type") not in ANSWER_CANDIDATE_NODE_TYPES:
-                    continue
-
-                expanded = _expanded_node_diagnostic(neighbor, edge, anchor, scan_node["id"])
-                _score_expanded_node(
-                    expanded,
-                    edge=edge,
-                    anchor=anchor,
-                    scan_node=scan_node,
-                    query_tokens=query_tokens,
-                    query_text=query_text,
-                    outgoing_import_count=outgoing_import_count,
-                    incoming_import_count=incoming_import_count,
-                )
-                total_candidates_considered += 1
-                if expanded.get("diagnostic_only"):
-                    if expanded["node_id"] not in candidate_expansions_by_id:
-                        current_diagnostic = diagnostic_neighbors_by_id.get(expanded["node_id"])
-                        if current_diagnostic is None or _candidate_quality_tuple(expanded) > _candidate_quality_tuple(current_diagnostic):
-                            diagnostic_neighbors_by_id[expanded["node_id"]] = expanded
-                    continue
-                current = candidate_expansions_by_id.get(expanded["node_id"])
-                if current is None or _candidate_quality_tuple(expanded) > _candidate_quality_tuple(current):
-                    candidate_expansions_by_id[expanded["node_id"]] = expanded
-                    candidate_nodes_by_id[expanded["node_id"]] = neighbor
-                    diagnostic_neighbors_by_id.pop(expanded["node_id"], None)
+                    _score_expanded_node(
+                        expanded,
+                        edge=edge,
+                        anchor=anchor,
+                        scan_node=scan_node,
+                        query_tokens=query_tokens,
+                        query_text=query_text,
+                        outgoing_import_count=outgoing_import_count,
+                        incoming_import_count=incoming_import_count,
+                    )
+                    total_candidates_considered += 1
+                    neighbors_added += 1
+                    if expanded.get("diagnostic_only"):
+                        if neighbor_id in next_frontier_ids:
+                            next_frontier = [
+                                item for item in next_frontier
+                                if str(item.get("id") or "") != neighbor_id
+                            ]
+                            next_frontier_ids.discard(neighbor_id)
+                        if expanded["node_id"] not in candidate_expansions_by_id:
+                            current_diagnostic = diagnostic_neighbors_by_id.get(expanded["node_id"])
+                            if current_diagnostic is None or _candidate_quality_tuple(expanded) > _candidate_quality_tuple(current_diagnostic):
+                                diagnostic_neighbors_by_id[expanded["node_id"]] = expanded
+                        continue
+                    current = candidate_expansions_by_id.get(expanded["node_id"])
+                    if current is None or _candidate_quality_tuple(expanded) > _candidate_quality_tuple(current):
+                        candidate_expansions_by_id[expanded["node_id"]] = expanded
+                        candidate_nodes_by_id[expanded["node_id"]] = neighbor
+                        diagnostic_neighbors_by_id.pop(expanded["node_id"], None)
+            frontier = next_frontier
+            if not frontier:
+                break
 
     ranked_expansions = sorted(candidate_expansions_by_id.values(), key=_expanded_sort_key)
     expanded_nodes, dropped_by_anchor_limit, dropped_by_global_limit = _select_ranked_expansions(
@@ -524,7 +559,7 @@ def _graph_active_skip_reason(candidate: dict, existing_chunk_ids: set[str], min
     if bool(candidate.get("diagnostic_only")):
         return "diagnostic_only"
     try:
-        score = float(candidate.get("candidate_score", 0.0) or 0.0)
+        score = float(candidate.get("candidate_score", 0.0) or 0.0) * _graph_decay_factor(candidate)
     except (TypeError, ValueError):
         score = 0.0
     if score < float(min_score):
@@ -564,13 +599,18 @@ def _graph_active_candidate(candidate: dict, *, hydrate: bool = True) -> dict:
             }
         }
     )
-    score = float(candidate.get("candidate_score", 0.0) or 0.0)
+    raw_score = float(candidate.get("candidate_score", 0.0) or 0.0)
+    decay_factor = _graph_decay_factor(candidate)
+    score = raw_score * decay_factor
     reasons = [str(reason) for reason in (candidate.get("score_reasons") or [])]
     active["retrieval_source"] = "graph_active"
     active["support_kind"] = "graph_active"
     active["source"] = "graph_active"
     active["expansion_type"] = "primary"
     active["graph_candidate_score"] = score
+    active["graph_raw_candidate_score"] = raw_score
+    active["decay_factor"] = decay_factor
+    active["expansion_depth"] = _graph_expansion_depth(candidate)
     active["graph_score_reasons"] = reasons
     active["graph_edge_type"] = candidate.get("edge_type", "")
     active["graph_anchor_path"] = candidate.get("anchor_relative_path") or candidate.get("scan_relative_path") or ""
@@ -609,6 +649,9 @@ def _compact_graph_active_candidate(candidate: dict) -> dict:
         "symbol_name": candidate.get("symbol_name", ""),
         "retrieval_source": candidate.get("retrieval_source", ""),
         "graph_candidate_score": candidate.get("graph_candidate_score", 0.0),
+        "graph_raw_candidate_score": candidate.get("graph_raw_candidate_score", 0.0),
+        "decay_factor": candidate.get("decay_factor", 1.0),
+        "expansion_depth": candidate.get("expansion_depth", 0),
         "graph_score_reasons": list(candidate.get("graph_score_reasons") or []),
         "graph_edge_type": candidate.get("graph_edge_type", ""),
         "graph_anchor_path": candidate.get("graph_anchor_path", ""),
@@ -616,6 +659,17 @@ def _compact_graph_active_candidate(candidate: dict) -> dict:
         "graph_confidence_tier": candidate.get("graph_confidence_tier", ""),
     }
     return {key: value for key, value in compact.items() if value not in (None, "", [], {})}
+
+
+def _graph_expansion_depth(candidate: dict) -> int:
+    try:
+        return min(GRAPH_MAX_HOPS, max(0, int(candidate.get("expansion_depth", candidate.get("hop", 1)))))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _graph_decay_factor(candidate: dict) -> float:
+    return GRAPH_DECAY_FACTORS[_graph_expansion_depth(candidate)]
 
 
 def _empty_shadow_result(
@@ -644,7 +698,7 @@ def _empty_shadow_result(
             "candidate_chunks_count": 0,
             "diagnostic_neighbors_count": 0,
             "edge_types_used": sorted({str(edge_type).strip() for edge_type in edge_types if str(edge_type).strip()}),
-            "max_depth": 1,
+            "max_depth": GRAPH_MAX_HOPS,
             "max_per_anchor": 0,
             "total_candidates_considered": 0,
             "candidates_dropped_by_anchor_limit": 0,
@@ -752,6 +806,9 @@ def _candidate_chunk_with_expansion(candidate: dict, expanded: dict) -> dict:
     enriched = dict(candidate)
     for key in (
         "candidate_score",
+        "raw_candidate_score",
+        "expansion_depth",
+        "decay_factor",
         "score_reasons",
         "selection_reason",
         "selection_rank",
@@ -770,7 +827,14 @@ def _candidate_chunk_with_expansion(candidate: dict, expanded: dict) -> dict:
     return enriched
 
 
-def _expanded_node_diagnostic(node: dict, edge: dict, anchor: GraphAnchor, scan_node_id: str) -> dict:
+def _expanded_node_diagnostic(
+    node: dict,
+    edge: dict,
+    anchor: GraphAnchor,
+    scan_node_id: str,
+    *,
+    expansion_depth: int = 1,
+) -> dict:
     direction = "outgoing" if edge.get("source_node_id") == scan_node_id else "incoming"
     reason = edge.get("edge_type")
     if edge.get("edge_type") == "imports" and direction == "incoming":
@@ -793,6 +857,7 @@ def _expanded_node_diagnostic(node: dict, edge: dict, anchor: GraphAnchor, scan_
         "confidence_tier": edge.get("confidence_tier"),
         "anchor_relative_path": anchor.node.get("relative_path"),
         "anchor_rank": anchor.hit_rank,
+        "expansion_depth": expansion_depth,
     }
 
 
@@ -899,6 +964,7 @@ def _score_expanded_node(
         score -= penalty
         reasons.append(f"hub_penalty:{outgoing_import_count}_imports")
 
+    expanded["raw_candidate_score"] = round(score, 4)
     expanded["candidate_score"] = round(score, 4)
     expanded["score_reasons"] = reasons
     expanded["diagnostic_only"] = diagnostic_only

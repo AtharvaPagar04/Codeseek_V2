@@ -163,15 +163,6 @@ def _encode_queries(model, queries: list[str], prefix: str = "") -> tuple[list[l
     return embeddings, mean_ms
 
 
-def _measure_model_memory_mb(model_id: str) -> float:
-    """Peak memory delta (MB) when loading the model."""
-    tracemalloc.start()
-    _load_model(model_id)
-    _, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-    return peak / (1024 * 1024)
-
-
 # ---------------------------------------------------------------------------
 # Per-case evaluation
 # ---------------------------------------------------------------------------

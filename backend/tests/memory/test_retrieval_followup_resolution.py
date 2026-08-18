@@ -55,8 +55,11 @@ class RetrievalFollowUpResolutionTests(unittest.TestCase):
         )
         self.assertEqual(sources, [])
         self.assertEqual(token_count, 0)
-        self.assertEqual(captured["query_info"].get("raw_query"), "also provide code")
-        self.assertIsNone(captured["query_info"].get("followup_hint"))
+        self.assertEqual(
+            captured["query_info"].get("raw_query"),
+            "also provide code account_info",
+        )
+        self.assertEqual(captured["query_info"].get("followup_anchor"), "account_info")
         follow_up_to = captured["query_info"].get("follow_up_to")
         if follow_up_to is not None:
             self.assertEqual(follow_up_to, "What does account_info do?")

@@ -25,6 +25,10 @@ from retrieval.config import (
 from retrieval.support.qdrant_config import create_qdrant_client
 _client = create_qdrant_client(check_compatibility=False)
 TRACE_EXPANDED_CHUNKS_LIMIT = 6
+MAX_FLOW_HOPS = 2
+MAX_FLOW_NEIGHBORS_PER_CANDIDATE = min(3, max(1, CALL_EXPANSION_LIMIT))
+EXPANSION_DECAY_FACTORS = {0: 1.0, 1: 0.8, 2: 0.5}
+FLOW_EXPANSION_INTENTS = frozenset({"DEPENDENCY", "EXPLANATION", "TRACE", "FLOW"})
 
 
 def expand(candidates: list[dict], query_info: dict) -> list[dict]:
@@ -36,34 +40,55 @@ def expand(candidates: list[dict], query_info: dict) -> list[dict]:
     for chunk in candidates:
         item = dict(chunk)
         item["expansion_type"] = chunk.get("expansion_type", "primary")
+        item["expansion_depth"] = 0
+        item["decay_factor"] = 1.0
         seen[item["chunk_id"]] = item
 
     if EXPAND_SPLIT_PARTS:
         for chunk in candidates:
             if int(chunk.get("total_parts", 1)) > 1:
-                _merge(seen, _split_parts(chunk), "split_part")
+                _merge(seen, _split_parts(chunk), "split_part", depth=1)
 
     if EXPAND_PARENT:
         for chunk in candidates:
             if chunk.get("chunk_type") == "method" and chunk.get("parent_symbol"):
-                _merge(seen, _parent_chunk(chunk), "parent_class")
+                _merge(seen, _parent_chunk(chunk), "parent_class", depth=1)
 
     # Keep callee expansion focused: strongest value is dependency tracing.
-    allow_calls = EXPAND_CALLS and intent == "DEPENDENCY"
+    flow_intent = str(primary_intent or intent).upper()
+    allow_calls = EXPAND_CALLS and flow_intent in FLOW_EXPANSION_INTENTS
     if allow_calls:
-        call_targets = []
+        frontier = list(candidates)
         visited_call_targets: set[str] = set()
-        for chunk in candidates:
-            for call in chunk.get("calls", []):
-                if call and call not in visited_call_targets:
-                    call_targets.append(call)
+        for depth in range(1, MAX_FLOW_HOPS + 1):
+            next_frontier: list[dict] = []
+            for chunk in frontier:
+                neighbors_added = 0
+                for call in chunk.get("calls", []) or []:
+                    if not call or call in visited_call_targets:
+                        continue
                     visited_call_targets.add(call)
-                if len(call_targets) >= CALL_EXPANSION_LIMIT:
-                    break
-            if len(call_targets) >= CALL_EXPANSION_LIMIT:
+                    for related in _callee_chunks(call)[:MAX_FLOW_NEIGHBORS_PER_CANDIDATE]:
+                        if neighbors_added >= MAX_FLOW_NEIGHBORS_PER_CANDIDATE:
+                            break
+                        related_id = str(related.get("chunk_id") or "")
+                        if not related_id or related_id in seen:
+                            continue
+                        _merge(
+                            seen,
+                            [related],
+                            "callee",
+                            depth=depth,
+                            flow_expansion=flow_intent in {"EXPLANATION", "TRACE", "FLOW"},
+                        )
+                        if related_id in seen:
+                            next_frontier.append(seen[related_id])
+                            neighbors_added += 1
+                    if neighbors_added >= MAX_FLOW_NEIGHBORS_PER_CANDIDATE:
+                        break
+            frontier = next_frontier
+            if not frontier or _trace_expansion_count(seen) >= TRACE_EXPANDED_CHUNKS_LIMIT:
                 break
-        for target in call_targets:
-            _merge(seen, _callee_chunks(target), "callee")
 
     # WS9: Sibling/neighborhood expansion.
     # Only runs for intents where local context depth materially helps.
@@ -76,7 +101,14 @@ def expand(candidates: list[dict], query_info: dict) -> list[dict]:
     return list(seen.values())
 
 
-def _merge(seen: dict[str, dict], chunks: list[dict], expansion_type: str) -> None:
+def _merge(
+    seen: dict[str, dict],
+    chunks: list[dict],
+    expansion_type: str,
+    *,
+    depth: int = 1,
+    flow_expansion: bool = False,
+) -> None:
     for chunk in chunks:
         chunk_id = chunk.get("chunk_id")
         if not chunk_id or chunk_id in seen:
@@ -86,9 +118,25 @@ def _merge(seen: dict[str, dict], chunks: list[dict], expansion_type: str) -> No
         item = dict(chunk)
         item.setdefault("retrieval_score", 0.0)
         item["expansion_type"] = expansion_type
+        item["expansion_depth"] = min(max(depth, 1), MAX_FLOW_HOPS)
+        item["decay_factor"] = EXPANSION_DECAY_FACTORS[item["expansion_depth"]]
+        _apply_decay(item, item["decay_factor"])
         if expansion_type == "callee":
             item.setdefault("support_kind", "dependency_edge")
+            if flow_expansion:
+                item["flow_expansion"] = True
         seen[chunk_id] = item
+
+
+def _apply_decay(item: dict, decay_factor: float) -> None:
+    """Scale ranking fields while retaining the original evidence metadata."""
+    for field in ("retrieval_score", "final_score", "fusion_score"):
+        if field not in item:
+            continue
+        try:
+            item[field] = float(item[field] or 0.0) * decay_factor
+        except (TypeError, ValueError):
+            continue
 
 
 def _trace_expansion_count(seen: dict[str, dict]) -> int:
@@ -218,6 +266,9 @@ def _merge_siblings(
             item = dict(chunk)
             item.setdefault("retrieval_score", 0.0)
             item["expansion_type"] = "sibling"
+            item["expansion_depth"] = 1
+            item["decay_factor"] = EXPANSION_DECAY_FACTORS[1]
+            _apply_decay(item, item["decay_factor"])
             seen[chunk["chunk_id"]] = item
             inserted += 1
             added += 1

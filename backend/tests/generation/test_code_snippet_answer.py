@@ -504,7 +504,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         def _query_state_text(query_info: dict) -> str:
             return " ".join(
                 str(query_info.get(field, ""))
-                for field in ("raw_query", "follow_up_resolved_to", "follow_up_to", "followup_hint", "follow_up_anchor_paths", "follow_up_anchor_symbols")
+                for field in ("raw_query", "follow_up_resolved_to", "follow_up_to", "followup_anchor", "followup_anchor_paths", "followup_anchor_symbols")
             ).lower()
 
         def record_search(query_info: dict) -> list[dict]:
@@ -657,7 +657,7 @@ class TestCodeSnippetAnswerQuality(unittest.TestCase):
         def _query_state_text(query_info: dict) -> str:
             return " ".join(
                 str(query_info.get(field, ""))
-                for field in ("raw_query", "follow_up_resolved_to", "follow_up_to", "followup_hint", "follow_up_anchor_paths", "follow_up_anchor_symbols")
+                for field in ("raw_query", "follow_up_resolved_to", "follow_up_to", "followup_anchor", "followup_anchor_paths", "followup_anchor_symbols")
             ).lower()
 
         def record_search(query_info: dict) -> list[dict]:

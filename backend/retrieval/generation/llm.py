@@ -2,6 +2,7 @@
 
 import os
 import time
+from dataclasses import asdict, dataclass, field
 from typing import Any, Iterator
 
 import httpx
@@ -69,6 +70,18 @@ SYSTEM_PROMPT = (
     "8. Never include a Sources, References, or Related Sources section in your answer."
     " The UI renders source cards separately. Do not list file paths at the end of your response.\n"
     "9. Do not open an explanation with `Function:`, `Signature:`, `Calls:`, or `Parameters:` unless the user explicitly asked for code metadata."
+    "\n\n### STRICT NEGATIVE GROUNDING\n"
+    "You are an expert codebase assistant. You must answer ONLY using the provided <target_repository_context>. "
+    "If the user asks about a feature, algorithm, mechanism (e.g., backtesting, risk management, signals, preprocessing), "
+    "or architectural pattern, and the provided context does NOT contain explicit implementation details for it, "
+    "you MUST state: 'This feature is not implemented in this repository.' DO NOT provide general definitions, textbook "
+    "explanations, or industry-standard practices. If it is not in the code, it does not exist for this answer."
+)
+
+CONVERSATIONAL_SYSTEM_PROMPT = (
+    "You are a helpful conversational assistant. Respond naturally and concisely "
+    "to the user's message. Do not claim knowledge of a repository, files, code, "
+    "or prior technical context unless it is explicitly provided in the conversation."
 )
 
 OPENAI_MODEL = os.getenv("RETRIEVAL_OPENAI_MODEL", "gpt-4o-mini")
@@ -88,6 +101,67 @@ class LlmProviderError(Exception):
         super().__init__(detail)
         self.status_code = int(status_code)
         self.detail = detail
+
+
+@dataclass
+class GenerationOutcome:
+    """Normalized, privacy-safe result of a provider generation attempt."""
+
+    visible_text: str = ""
+    status: str = "empty"
+    finish_reason: str = ""
+    visible_delta_count: int = 0
+    ignored_field_names: list[str] = field(default_factory=list)
+    retry_count: int = 0
+    fallback_used: bool = False
+    error_code: str = ""
+
+    def metadata(self) -> dict[str, Any]:
+        data = asdict(self)
+        data.pop("visible_text")
+        data["visible_text_length"] = len(self.visible_text)
+        return data
+
+
+class GenerationOutcomeError(LlmProviderError):
+    """A provider completed without a persistable assistant answer."""
+
+    def __init__(self, outcome: GenerationOutcome, detail: str = "Generation produced no visible answer text."):
+        super().__init__(502, detail)
+        self.outcome = outcome
+
+
+def _record_generation_outcome(
+    selection_meta: dict[str, Any] | None,
+    outcome: GenerationOutcome,
+) -> None:
+    if selection_meta is not None:
+        selection_meta["generation_outcome"] = outcome.metadata()
+
+
+def _require_visible_outcome(
+    text: str,
+    outcome: GenerationOutcome,
+    *,
+    fallback_used: bool | None = None,
+) -> str:
+    outcome.visible_text = text
+    if fallback_used is not None:
+        outcome.fallback_used = fallback_used
+    if text.strip():
+        if outcome.status not in {"partial"}:
+            outcome.status = "complete"
+        return text
+    if outcome.status not in {"reasoning_only", "cancelled", "provider_error", "transport_error"}:
+        outcome.status = "empty"
+    outcome.error_code = outcome.error_code or "no_visible_text"
+    raise GenerationOutcomeError(outcome)
+
+
+def _failure_status(exc: Exception) -> str:
+    if isinstance(exc, (httpx.TimeoutException, httpx.TransportError, TimeoutError, ConnectionError, OSError)):
+        return "transport_error"
+    return "provider_error"
 
 
 def generate_answer(
@@ -126,7 +200,7 @@ def generate_answer(
         else:
             level = str(evidence_confidence).lower()
         if level == "weak" and response_mode not in (
-            "flow_summary", "overview_summary", "code_snippet",
+            "overview_summary", "code_snippet",
             "symbol_explanation", "usage_example",
         ):
             response_mode = "low_context"
@@ -143,6 +217,7 @@ def generate_answer(
         allowed_sources or [],
         extra_context_blocks=extra_context_blocks or [],
         response_mode=response_mode,
+        evidence_confidence=evidence_confidence,
     )
     resolved = _resolve_provider_config(
         provider_config,
@@ -177,6 +252,7 @@ def generate_answer(
                 raise LlmProviderError(503, str(exc)) from exc
             except RuntimeError as exc:
                 raise LlmProviderError(502, str(exc)) from exc
+        outcome = GenerationOutcome()
         answer = _provider_answer(
             prompt,
             provider=resolved["provider"],
@@ -185,7 +261,9 @@ def generate_answer(
             timeout_seconds=resolved["timeout_seconds"],
             base_url=resolved.get("base_url", ""),
             max_tokens=QUERY_MAX_TOKENS if resolved["provider"] == "local" else None,
+            outcome=outcome,
         )
+        _require_visible_outcome(answer, outcome)
         if (
             resolved["provider"] == "local"
             and resolved.get("routing_mode", "").startswith("auto")
@@ -202,6 +280,7 @@ def generate_answer(
                 raise LlmProviderError(503, str(exc)) from exc
             except RuntimeError as exc:
                 raise LlmProviderError(502, str(exc)) from exc
+            fallback_outcome = GenerationOutcome(fallback_used=True)
             fallback_answer = _provider_answer(
                 prompt,
                 provider=resolved["provider"],
@@ -210,7 +289,10 @@ def generate_answer(
                 timeout_seconds=resolved["timeout_seconds"],
                 base_url=resolved.get("base_url", ""),
                 max_tokens=QUERY_MAX_TOKENS,
+                outcome=fallback_outcome,
+                fallback_used=True,
             )
+            _require_visible_outcome(fallback_answer, fallback_outcome, fallback_used=True)
             if selection_meta is not None:
                 selection_meta.update(
                     {
@@ -220,9 +302,74 @@ def generate_answer(
                         "fallback_reason": "insufficient_first_pass",
                     }
                 )
+            _record_generation_outcome(selection_meta, fallback_outcome)
             return fallback_answer
+        _record_generation_outcome(selection_meta, outcome)
         return answer
-    return "No LLM provider API key configured. Add one in the frontend API config and make it active."
+    answer = "No LLM provider API key configured. Add one in the frontend API config and make it active."
+    _record_generation_outcome(selection_meta, GenerationOutcome(visible_text=answer, status="complete"))
+    return answer
+
+
+def generate_conversational_answer(
+    raw_query: str,
+    history_block: str,
+    *,
+    provider_config: dict[str, Any] | None = None,
+    query_info: dict[str, Any] | None = None,
+    selection_meta: dict[str, Any] | None = None,
+) -> str:
+    """Answer an out-of-scope message without repository retrieval context."""
+    prompt_parts = ["--- USER MESSAGE ---", raw_query]
+    if history_block:
+        prompt_parts.extend(
+            [
+                "--- OPTIONAL CONVERSATION HISTORY ---",
+                history_block,
+            ]
+        )
+    prompt = "\n\n".join(prompt_parts)
+    resolved = _resolve_provider_config(
+        provider_config,
+        raw_query=raw_query,
+        query_info=query_info or {},
+        evidence_confidence=None,
+    )
+    if not resolved:
+        return "No LLM provider API key configured. Add one in the frontend API config and make it active."
+
+    if selection_meta is not None:
+        runtime_state = get_provider_runtime_state(resolved["provider"], resolved["model"])
+        selection_meta.update(
+            {
+                "provider": resolved["provider"],
+                "model": resolved["model"],
+                "routing_mode": resolved.get("routing_mode", ""),
+                "timeout_seconds": resolved.get("timeout_seconds", 0.0),
+                "runtime_status": runtime_state.get("status", ""),
+                "runtime_detail": runtime_state.get("detail", ""),
+            }
+        )
+    if resolved["provider"] == "local":
+        try:
+            background_prime_primary_model()
+        except (TimeoutError, RuntimeError) as exc:
+            raise LlmProviderError(503, str(exc)) from exc
+    outcome = GenerationOutcome()
+    answer = _provider_answer(
+        prompt,
+        provider=resolved["provider"],
+        api_key=resolved["api_key"],
+        model=resolved["model"],
+        timeout_seconds=resolved["timeout_seconds"],
+        base_url=resolved.get("base_url", ""),
+        max_tokens=QUERY_MAX_TOKENS,
+        system_prompt=CONVERSATIONAL_SYSTEM_PROMPT,
+        outcome=outcome,
+    )
+    _require_visible_outcome(answer, outcome)
+    _record_generation_outcome(selection_meta, outcome)
+    return answer
 
 
 def generate_answer_stream(
@@ -235,6 +382,8 @@ def generate_answer_stream(
     query_info: dict[str, Any] | None = None,
     evidence_confidence: dict[str, Any] | str | None = None,
     selection_meta: dict[str, Any] | None = None,
+    stream_factory: Any | None = None,
+    completion_request: Any | None = None,
 ) -> Iterator[str]:
     """Generate a grounded answer stream from context using a selected provider."""
     # Resolve the expected response mode
@@ -261,7 +410,7 @@ def generate_answer_stream(
         else:
             level = str(evidence_confidence).lower()
         if level == "weak" and response_mode not in (
-            "flow_summary", "overview_summary", "code_snippet",
+            "overview_summary", "code_snippet",
             "symbol_explanation", "usage_example",
         ):
             response_mode = "low_context"
@@ -278,6 +427,7 @@ def generate_answer_stream(
         allowed_sources or [],
         extra_context_blocks=extra_context_blocks or [],
         response_mode=response_mode,
+        evidence_confidence=evidence_confidence,
     )
     resolved = _resolve_provider_config(
         provider_config,
@@ -321,6 +471,7 @@ def generate_answer_stream(
             and resolved["model"] == LOCAL_LLM_PRIMARY_MODEL
         )
         if is_auto_local:
+            outcome = GenerationOutcome()
             answer = _provider_answer(
                 prompt,
                 provider=resolved["provider"],
@@ -329,7 +480,10 @@ def generate_answer_stream(
                 timeout_seconds=resolved["timeout_seconds"],
                 base_url=resolved.get("base_url", ""),
                 max_tokens=QUERY_MAX_TOKENS,
+                outcome=outcome,
+                completion_request=completion_request,
             )
+            _require_visible_outcome(answer, outcome)
             if _should_escalate_local_answer(answer):
                 try:
                     wait_for_model_ready(
@@ -341,6 +495,7 @@ def generate_answer_stream(
                     raise LlmProviderError(503, str(exc)) from exc
                 except RuntimeError as exc:
                     raise LlmProviderError(502, str(exc)) from exc
+                outcome = GenerationOutcome(fallback_used=True)
                 answer = _provider_answer(
                     prompt,
                     provider=resolved["provider"],
@@ -349,7 +504,11 @@ def generate_answer_stream(
                     timeout_seconds=resolved["timeout_seconds"],
                     base_url=resolved.get("base_url", ""),
                     max_tokens=QUERY_MAX_TOKENS,
+                    outcome=outcome,
+                    fallback_used=True,
+                    completion_request=completion_request,
                 )
+                _require_visible_outcome(answer, outcome, fallback_used=True)
                 if selection_meta is not None:
                     selection_meta.update(
                         {
@@ -359,6 +518,7 @@ def generate_answer_stream(
                             "fallback_reason": "insufficient_first_pass",
                         }
                     )
+            _record_generation_outcome(selection_meta, outcome)
             # Yield the final answer in small chunks
             for i in range(0, len(answer), 8):
                 yield answer[i:i+8]
@@ -366,6 +526,7 @@ def generate_answer_stream(
             return
 
         # Otherwise, perform true streaming!
+        outcome = GenerationOutcome()
         try:
             for chunk in _provider_answer_stream(
                 prompt,
@@ -375,24 +536,48 @@ def generate_answer_stream(
                 timeout_seconds=resolved["timeout_seconds"],
                 base_url=resolved.get("base_url", ""),
                 max_tokens=QUERY_MAX_TOKENS if resolved["provider"] == "local" else None,
+                outcome=outcome,
+                stream_factory=stream_factory,
             ):
                 yield chunk
         except Exception:
-            # Safe fallback: call full-generation function and emit the completed answer in small chunks.
-            answer = _provider_answer(
-                prompt,
-                provider=resolved["provider"],
-                api_key=resolved["api_key"],
-                model=resolved["model"],
-                timeout_seconds=resolved["timeout_seconds"],
-                base_url=resolved.get("base_url", ""),
-                max_tokens=QUERY_MAX_TOKENS if resolved["provider"] == "local" else None,
-            )
-            for i in range(0, len(answer), 8):
-                yield answer[i:i+8]
-                time.sleep(0.01)
+            if outcome.visible_text.strip():
+                outcome.status = "partial"
+                _record_generation_outcome(selection_meta, outcome)
+                return
+        else:
+            if outcome.visible_text.strip():
+                _record_generation_outcome(selection_meta, outcome)
+                return
+
+        # No visible token was sent, so one full-generation fallback is safe.
+        fallback_outcome = GenerationOutcome(
+            finish_reason=outcome.finish_reason,
+            ignored_field_names=list(outcome.ignored_field_names),
+            fallback_used=True,
+        )
+        answer = _provider_answer(
+            prompt,
+            provider=resolved["provider"],
+            api_key=resolved["api_key"],
+            model=resolved["model"],
+            timeout_seconds=resolved["timeout_seconds"],
+            base_url=resolved.get("base_url", ""),
+            max_tokens=QUERY_MAX_TOKENS if resolved["provider"] == "local" else None,
+            outcome=fallback_outcome,
+            retry_empty_once=False,
+            fallback_used=True,
+            completion_request=completion_request,
+        )
+        _require_visible_outcome(answer, fallback_outcome, fallback_used=True)
+        _record_generation_outcome(selection_meta, fallback_outcome)
+        for i in range(0, len(answer), 8):
+            yield answer[i:i+8]
+            time.sleep(0.01)
         return
-    yield "No LLM provider API key configured. Add one in the frontend API config and make it active."
+    answer = "No LLM provider API key configured. Add one in the frontend API config and make it active."
+    _record_generation_outcome(selection_meta, GenerationOutcome(visible_text=answer, status="complete"))
+    yield answer
 
 
 def _build_prompt(
@@ -402,6 +587,7 @@ def _build_prompt(
     allowed_sources: list[dict],
     extra_context_blocks: list[str] | None = None,
     response_mode: str = "technical_trace",
+    evidence_confidence: dict[str, Any] | str | None = None,
 ) -> str:
     parts = []
     _EXPLICIT_MODE_HEADERS = {
@@ -494,6 +680,11 @@ def _build_prompt(
             "- Do not say 'The implementation is in'. Do not use symbol/function wording.\n"
             "- Keep the answer concise. Reference related docs when useful."
         )
+    elif header == "FLOW_SUMMARY" and _evidence_level(evidence_confidence) == "weak":
+        parts.append(
+            "[SYSTEM OVERRIDE: Evidence is weak. Do not explain the flow. State clearly that the "
+            "requested feature/flow is not explicitly implemented in the provided code context.]"
+        )
     elif header == "FLOW_SUMMARY":
         parts.append(
             "The user asked how something works. Explain the flow like a senior engineer walking a colleague through it.\n\n"
@@ -579,6 +770,11 @@ def _build_prompt(
 
     parts.append("--- CODE CONTEXT (CURRENT QUERY) ---")
     parts.append("Fresh retrieved context for the current query. Treat this as the primary evidence.")
+    if response_mode in {"feature_explanation", "architecture_explanation"}:
+        parts.append(
+            "[SYSTEM NOTE: Verify feature existence in code context before explaining. "
+            "Do not hallucinate missing features.]"
+        )
     parts.append("<target_repository_context>")
     parts.append(context)
     for block in extra_context_blocks or []:
@@ -606,6 +802,12 @@ def _build_prompt(
         "If other code appears outside the allowed/current context, ignore it."
     )
     return "\n\n".join(parts)
+
+
+def _evidence_level(evidence_confidence: dict[str, Any] | str | None) -> str:
+    if isinstance(evidence_confidence, dict):
+        return str(evidence_confidence.get("level", "")).strip().lower()
+    return str(evidence_confidence or "").strip().lower()
 
 
 def _resolve_provider_config(
@@ -751,6 +953,11 @@ def _provider_answer(
     timeout_seconds: float,
     base_url: str = "",
     max_tokens: int | None = None,
+    system_prompt: str | None = None,
+    outcome: GenerationOutcome | None = None,
+    retry_empty_once: bool = True,
+    fallback_used: bool = False,
+    completion_request: Any | None = None,
 ) -> str:
     global _llm_failures, _llm_circuit_open_until
     now = time.time()
@@ -761,15 +968,22 @@ def _provider_answer(
             f"LLM provider temporarily unavailable. Retry after {remaining}s.",
         )
 
+    result = outcome if outcome is not None else GenerationOutcome()
+    result.fallback_used = fallback_used
     last_exc: Exception | None = None
     if provider == "unsupported":
         raise LlmProviderError(
             400,
             f"Unsupported LLM provider configuration: {model}",
         )
-    for attempt in range(1, RETRIEVAL_RETRY_ATTEMPTS + 1):
+    request_count = 0
+    transport_failures = 0
+    empty_retried = False
+    while True:
+        request_count += 1
         try:
-            response = _chat_completion_request(
+            request_call = completion_request or _chat_completion_request
+            response = request_call(
                 provider=provider,
                 api_key=api_key,
                 model=model,
@@ -777,19 +991,41 @@ def _provider_answer(
                 timeout_seconds=timeout_seconds,
                 base_url=base_url,
                 max_tokens=max_tokens,
+                system_prompt=system_prompt,
             )
             _llm_failures = 0
-            content = _extract_message_content(response)
-            return content or "No response text returned from model."
+            normalized = _normalize_provider_response(response)
+            normalized.ignored_field_names = list(
+                dict.fromkeys(result.ignored_field_names + normalized.ignored_field_names)
+            )
+            normalized.retry_count = request_count - 1
+            normalized.fallback_used = fallback_used
+            result.__dict__.update(normalized.__dict__)
+            if result.visible_text.strip():
+                return result.visible_text
+            if retry_empty_once and not empty_retried:
+                empty_retried = True
+                continue
+            result.error_code = "no_visible_text"
+            raise GenerationOutcomeError(result)
+        except GenerationOutcomeError:
+            raise
         except Exception as exc:  # pragma: no cover
             last_exc = exc
-            if attempt < RETRIEVAL_RETRY_ATTEMPTS:
-                time.sleep(RETRIEVAL_RETRY_BACKOFF_SECONDS * attempt)
+            transport_failures += 1
+            if transport_failures < RETRIEVAL_RETRY_ATTEMPTS:
+                time.sleep(RETRIEVAL_RETRY_BACKOFF_SECONDS * transport_failures)
+                continue
+            break
 
     _llm_failures += 1
     if _llm_failures >= RETRIEVAL_CIRCUIT_BREAKER_THRESHOLD:
         _llm_circuit_open_until = time.time() + RETRIEVAL_CIRCUIT_BREAKER_COOLDOWN_SECONDS
-    raise _classify_provider_error(last_exc)
+    classified = _classify_provider_error(last_exc)
+    result.status = _failure_status(last_exc) if last_exc is not None else "provider_error"
+    result.retry_count = max(0, request_count - 1)
+    result.error_code = type(last_exc).__name__ if last_exc is not None else "provider_error"
+    raise classified
 
 
 def _chat_completion_request(
@@ -921,44 +1157,66 @@ def _classify_provider_error(exc: Exception | None) -> LlmProviderError:
     )
 
 
-def _extract_message_content(response: dict[str, Any]) -> str:
-    if not isinstance(response, dict):
-        return ""
-    choices = response.get("choices")
-    if not isinstance(choices, list) or not choices:
-        if isinstance(response.get("content"), str):
-            return response["content"].strip()
-        if isinstance(response.get("text"), str):
-            return response["text"].strip()
-        return ""
-
-    first_choice = choices[0] if isinstance(choices[0], dict) else {}
-    message = first_choice.get("message")
-    if not isinstance(message, dict):
-        message = {}
-
-    content = message.get("content")
-    if content is None or (isinstance(content, str) and not content.strip()):
-        content = (
-            message.get("reasoning_content")
-            or message.get("reasoning")
-            or first_choice.get("text")
-            or ""
-        )
-
-    if isinstance(content, str):
-        return content.strip()
-
-    if isinstance(content, list):
+def _visible_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
         parts = []
-        for item in content:
+        for item in value:
             if isinstance(item, dict):
                 text = item.get("text") or item.get("content") or ""
-                if text:
-                    parts.append(str(text))
-        return "\n".join(parts).strip()
-
+                if isinstance(text, str) and text:
+                    parts.append(text)
+        return "\n".join(parts)
     return ""
+
+
+def _ignored_reasoning_fields(container: dict[str, Any]) -> list[str]:
+    return [name for name in ("reasoning_content", "reasoning") if container.get(name) is not None]
+
+
+def _visible_answer_fields(container: dict[str, Any], *fallback_values: Any) -> tuple[str, list[str]]:
+    text = _visible_text(container.get("content"))
+    if not text.strip():
+        for value in fallback_values:
+            text = _visible_text(value)
+            if text.strip():
+                break
+    return text, _ignored_reasoning_fields(container)
+
+
+def _normalize_provider_response(response: dict[str, Any]) -> GenerationOutcome:
+    outcome = GenerationOutcome()
+    if not isinstance(response, dict):
+        return outcome
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        text, ignored = _visible_answer_fields(response, response.get("text"))
+        outcome.visible_text = text.strip()
+        outcome.ignored_field_names = ignored
+    else:
+        first_choice = choices[0] if isinstance(choices[0], dict) else {}
+        message = first_choice.get("message")
+        if not isinstance(message, dict):
+            message = {}
+
+        text, ignored = _visible_answer_fields(message, first_choice.get("text"))
+        outcome.visible_text = text.strip()
+        outcome.ignored_field_names = ignored
+        finish_reason = first_choice.get("finish_reason")
+        if isinstance(finish_reason, str):
+            outcome.finish_reason = finish_reason
+
+    if outcome.visible_text:
+        outcome.status = "complete"
+        outcome.visible_delta_count = 1
+    elif outcome.ignored_field_names:
+        outcome.status = "reasoning_only"
+    return outcome
+
+
+def _extract_message_content(response: dict[str, Any]) -> str:
+    return _normalize_provider_response(response).visible_text
 
 
 def _provider_answer_stream(
@@ -970,6 +1228,8 @@ def _provider_answer_stream(
     timeout_seconds: float,
     base_url: str = "",
     max_tokens: int | None = None,
+    outcome: GenerationOutcome | None = None,
+    stream_factory: Any | None = None,
 ) -> Iterator[str]:
     global _llm_failures, _llm_circuit_open_until
     now = time.time()
@@ -1009,8 +1269,10 @@ def _provider_answer_stream(
         }
         payload["keep_alive"] = QUERY_OLLAMA_KEEP_ALIVE
 
+    result = outcome if outcome is not None else GenerationOutcome()
     try:
-        with httpx.stream("POST", url, headers=headers, json=payload, timeout=timeout_seconds) as r:
+        request_stream = stream_factory or httpx.stream
+        with request_stream("POST", url, headers=headers, json=payload, timeout=timeout_seconds) as r:
             r.raise_for_status()
             for line in r.iter_lines():
                 line = line.strip()
@@ -1024,11 +1286,38 @@ def _provider_answer_stream(
                         chunk_data = json.loads(data_str)
                         choices = chunk_data.get("choices", [])
                         if choices:
-                            delta = choices[0].get("delta", {})
-                            content = delta.get("content", "")
+                            choice = choices[0] if isinstance(choices[0], dict) else {}
+                            delta = choice.get("delta", {})
+                            if not isinstance(delta, dict):
+                                delta = {}
+                            content, ignored_fields = _visible_answer_fields(delta)
+                            for field_name in ignored_fields:
+                                if field_name not in result.ignored_field_names:
+                                    result.ignored_field_names.append(field_name)
+                            finish_reason = choice.get("finish_reason")
+                            if isinstance(finish_reason, str):
+                                result.finish_reason = finish_reason
                             if content:
+                                result.visible_text += content
+                                result.visible_delta_count += 1
                                 yield content
                     except Exception:
-                        pass
+                        if "malformed_event" not in result.ignored_field_names:
+                            result.ignored_field_names.append("malformed_event")
+        if result.visible_text.strip():
+            result.status = "complete"
+        elif any(name in {"reasoning_content", "reasoning"} for name in result.ignored_field_names):
+            result.status = "reasoning_only"
+        else:
+            result.status = "empty"
+    except GeneratorExit:
+        result.status = "cancelled"
+        result.error_code = "cancelled"
+        raise
     except Exception as exc:
+        if result.visible_text.strip():
+            result.status = "partial"
+        else:
+            result.status = _failure_status(exc)
+        result.error_code = type(exc).__name__
         raise _classify_provider_error(exc)

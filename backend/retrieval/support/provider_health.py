@@ -24,10 +24,6 @@ class ProviderNotReadyError(RuntimeError):
     """Raised when the provider is configured but not reachable / not loaded."""
 
 
-def _is_auto_model(model: str | None) -> bool:
-    return (model or "").strip().lower() in {"", "auto", "default"}
-
-
 def _ollama_api_root() -> str:
     base = LOCAL_LLM_BASE_URL.rstrip("/")
     if base.endswith("/v1"):

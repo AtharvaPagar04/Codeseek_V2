@@ -518,6 +518,7 @@ def _active_candidate(
     diagnostic_only: bool = False,
     confidence_tier: str = "exact_local",
     selection_rank: int = 1,
+    expansion_depth: int = 1,
 ) -> dict:
     return {
         "chunk_id": chunk_id,
@@ -532,6 +533,7 @@ def _active_candidate(
         "edge_type": "imports",
         "anchor_relative_path": "src/app/page.tsx",
         "selection_rank": selection_rank,
+        "expansion_depth": expansion_depth,
     }
 
 
@@ -645,7 +647,9 @@ def test_graph_active_injects_eligible_query_matched_candidate():
     assert added["chunk_id"] == "projects-component"
     assert added["retrieval_source"] == "graph_active"
     assert added["support_kind"] == "graph_active"
-    assert added["graph_candidate_score"] == 118.0
+    assert added["graph_candidate_score"] == 94.4
+    assert added["graph_raw_candidate_score"] == 118.0
+    assert added["decay_factor"] == 0.8
     assert added["graph_score_reasons"] == ["edge:outgoing_import", "query_match:projects"]
     assert added["graph_edge_type"] == "imports"
     assert added["graph_anchor_path"] == "src/app/page.tsx"
@@ -654,6 +658,26 @@ def test_graph_active_injects_eligible_query_matched_candidate():
     assert diagnostics["reason"] == "added"
     assert diagnostics["added_count"] == 1
     assert diagnostics["added_chunks"][0]["chunk_id"] == "projects-component"
+
+
+def test_graph_active_applies_depth_decay_to_hydrated_candidates():
+    active_candidates, _diagnostics = select_graph_active_candidates(
+        [{"chunk_id": "page-file", "relative_path": "src/app/page.tsx"}],
+        _active_shadow([
+            _active_candidate("one-hop", score=100.0, expansion_depth=1),
+            _active_candidate("two-hop", score=100.0, expansion_depth=2, selection_rank=2),
+        ]),
+        enabled=True,
+        shadow_enabled=True,
+        min_score=1,
+        hydrate=False,
+    )
+
+    by_id = {item["chunk_id"]: item for item in active_candidates}
+    assert by_id["one-hop"]["graph_candidate_score"] == 80.0
+    assert by_id["one-hop"]["decay_factor"] == 0.8
+    assert by_id["two-hop"]["graph_candidate_score"] == 50.0
+    assert by_id["two-hop"]["decay_factor"] == 0.5
 
 
 def test_graph_active_requires_shadow_flag_enabled():

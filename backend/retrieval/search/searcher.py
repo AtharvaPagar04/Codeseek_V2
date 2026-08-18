@@ -72,6 +72,7 @@ LEXICAL_STOPWORDS = {
 }
 IMPORT_TRACE_DEPTH_LIMIT = 3
 TRACE_EXPANDED_CHUNKS_LIMIT = 6
+MIN_RELEVANCE_SCORE = 0.45
 PREVIOUS_CANDIDATE_BLOCKED_INTENTS = {
     "CODE_REQUEST",
     "TRACE",
@@ -519,11 +520,20 @@ def _semantic_boost_discovery(
         score = 0.0
         matched_terms = set()
         
-        # 1. Semantic-label match
+        # 1. Semantic-label match. Keep label influence multiplicative so the
+        # discovery layer uses the same semantic weighting contract as reranking.
         overlap_semantic_labels = set(meta["semantic_labels"]).intersection(
             semantic_keywords
         )
-        score += len(overlap_semantic_labels) * 3.0
+        if overlap_semantic_labels:
+            score = max(
+                score,
+                compute_semantic_label_boost(
+                    list(meta["semantic_labels"]),
+                    {"boost_semantic_keywords": semantic_keywords},
+                ),
+            )
+            matched_terms.update(overlap_semantic_labels)
         
         # 2. Path/filename term overlap
         path_lower = rel_path.lower()
@@ -715,6 +725,8 @@ def search(query_info: dict) -> list[dict]:
     raw_query = query_info["raw_query"]
     intent = query_info["intent"]
     primary_intent = query_info.get("primary_intent", intent)
+    if primary_intent == "OUT_OF_SCOPE":
+        return []
     entities = query_info["entities"]
     
     query_info.setdefault("feature_routing", {
@@ -856,6 +868,11 @@ def search(query_info: dict) -> list[dict]:
                             if variant not in query_info["feature_routing"]["normalized_terms"]:
                                 query_info["feature_routing"]["normalized_terms"].append(variant)
 
+    merged = [
+        candidate
+        for candidate in merged
+        if _candidate_relevance_score(candidate) >= MIN_RELEVANCE_SCORE
+    ]
     return merged[:TOP_K_AFTER_MERGE]
 
 
@@ -1796,6 +1813,11 @@ def _exact_entity_search(entities: dict) -> list[tuple[dict, float, str]]:
         results.append((exact_payload, score, "exact_entity"))
         seen.add(chunk_id)
     results.sort(key=lambda item: -item[1])
+    results = [
+        result
+        for result in results
+        if float(result[1] or 0.0) >= MIN_RELEVANCE_SCORE
+    ]
     return results[:TOP_K_AFTER_MERGE]
 
 
@@ -2123,13 +2145,13 @@ def _previous_candidate_injection_score(payload: dict, raw_query: str, query_inf
     if tokens:
         overlap = len(tokens & set(re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{2,}", text)))
     entities = query_info.get("entities") or {}
-    followup_hint = str(query_info.get("followup_hint") or "").lower()
+    followup_anchor = str(query_info.get("followup_anchor") or "").lower()
     entity_bonus = 0.0
     for key in ("routes", "env_keys", "services"):
         for value in entities.get(key, []) or []:
             if str(value).lower() in text:
                 entity_bonus += 0.15
-    if followup_hint and followup_hint in text:
+    if followup_anchor and followup_anchor in text:
         entity_bonus += 0.20
     base = 0.60 if query_info.get("is_followup") and not any(
         entities.get(key) for key in ("files", "symbols", "routes", "env_keys", "services")
@@ -2154,6 +2176,17 @@ def _merge_results(*layers):
                 records[chunk_id]["exact_retrieval_hit"] = False
             if source in {"dense", "semantic_boost"}:
                 records[chunk_id]["retrieval_score"] = max(records[chunk_id]["retrieval_score"], score)
+            if source == "lexical":
+                try:
+                    lexical_score = float(score or 0.0)
+                    if lexical_score > 1.0:
+                        lexical_score = min(1.0, lexical_score / 3.0)
+                    records[chunk_id]["lexical_score"] = max(
+                        records[chunk_id].get("lexical_score", 0.0),
+                        lexical_score,
+                    )
+                except (TypeError, ValueError):
+                    pass
             if source in {"dense", "lexical", "metadata", "semantic_boost"}:
                 records[chunk_id]["fusion_score"] += 1.0 / (60 + rank)
             if source in {
@@ -2214,6 +2247,32 @@ def _merge_results(*layers):
         )
     )
     return merged
+
+
+def _candidate_relevance_score(candidate: dict) -> float:
+    """Return the normalized score used by the final candidate gate."""
+    scores: list[float] = []
+    for field in ("final_score", "retrieval_score", "lexical_score"):
+        value = candidate.get(field)
+        if value not in (None, ""):
+            try:
+                scores.append(float(value))
+            except (TypeError, ValueError):
+                pass
+    score = max(scores) if scores else 0.0
+    try:
+        score = max(score, float(candidate.get("relevance_floor", 0.0) or 0.0))
+    except (TypeError, ValueError):
+        pass
+    if scores or candidate.get("relevance_floor"):
+        return score
+    fusion_score = candidate.get("fusion_score", 0.0)
+    try:
+        if float(fusion_score or 0.0) > 0.0:
+            return min(0.40, 0.20 + 2.0 * float(fusion_score))
+    except (TypeError, ValueError):
+        pass
+    return 0.0
 
 
 def _inject_direct_topics_candidates(raw_query: str, primary_intent: str) -> list[tuple[dict, float, str]]:
@@ -2582,6 +2641,7 @@ def _inject_import_backing_candidates(raw_query: str, candidates: list[dict], qu
                     backing_payload = dict(payload)
                     backing_payload["expansion_type"] = "supporting_import"
                     backing_payload["support_kind"] = "import_backing"
+                    backing_payload["relevance_floor"] = MIN_RELEVANCE_SCORE
                     backing_payload["supporting_from"] = relative_path
                     backing_payload["supporting_import_name"] = imported_name
                     backing_payload["resolved_import_path"] = resolved
@@ -3227,10 +3287,10 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
     conversation_state = query_info.get("conversation_state") if query_info else None
     previous_files = conversation_state.get("previous_files", []) if conversation_state else []
     previous_symbols = conversation_state.get("previous_symbols", []) if conversation_state else []
-    followup_hint = str(query_info.get("followup_hint") or "").strip() if query_info else ""
-    followup_hint_entities = query_info.get("followup_hint_entities") if query_info else None
-    hint_files = list((followup_hint_entities or {}).get("files", []) or [])
-    hint_symbols = list((followup_hint_entities or {}).get("symbols", []) or [])
+    followup_anchor = str(query_info.get("followup_anchor") or "").strip() if query_info else ""
+    followup_anchor_entities = query_info.get("followup_anchor_entities") if query_info else None
+    anchor_files = list((followup_anchor_entities or {}).get("files", []) or [])
+    anchor_symbols = list((followup_anchor_entities or {}).get("symbols", []) or [])
     collection = get_collection_name()
     matched_code_topic_route = (
         query_info.get("code_topic_route") if query_info else None
@@ -3308,10 +3368,10 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
                 if candidate_dir == prev_dir and candidate_dir not in (".", ""):
                     followup_boost += 0.15
                     break
-            if followup_hint:
-                if candidate_path in hint_files:
+            if followup_anchor:
+                if candidate_path in anchor_files:
                     followup_boost += 0.10
-                if item.get("symbol_name") in hint_symbols:
+                if item.get("symbol_name") in anchor_symbols:
                     followup_boost += 0.10
             if item.get("injected_from_previous_turn"):
                 followup_boost = min(followup_boost, 0.10)
@@ -3699,7 +3759,21 @@ def _rerank_with_query_tokens(raw_query: str, candidates: list[dict], query_info
             central_file_ranking["boosted_paths"].append(rel_path)
         rescored.append(boosted)
 
-    rescored.sort(key=lambda item: -float(item.get("final_score", 0.0)))
+    overview_mode = primary_intent in {"OVERVIEW", "ARCHITECTURE"}
+
+    def _overview_order(item: dict) -> int:
+        if not overview_mode:
+            return 0
+        is_repo_summary = (
+            item.get("chunk_type") == "repo_summary"
+            or item.get("file_type") == "repo_summary"
+            or item.get("relative_path") == "__repo_summary__.md"
+        )
+        if is_repo_summary:
+            return 0
+        return 1 if _overview_priority(item) > 0 else 2
+
+    rescored.sort(key=lambda item: (_overview_order(item), -float(item.get("final_score", 0.0))))
 
     diverse_results = []
     file_counts = {}
@@ -3746,6 +3820,7 @@ def _inject_overview_candidates(candidates: list[dict]) -> list[dict]:
         # these items near the top.  repo_summary (priority=100) → 1.0;
         # other scored overview files get a proportional value.
         priority = _overview_priority(injected)
+        injected["overview_priority"] = priority
         injected.setdefault("retrieval_score", min(1.0, priority / 100.0))
         injected.setdefault("fusion_score", 0.0)
         # Mark as exact_retrieval_hit so the reranker always places overview
@@ -3989,7 +4064,10 @@ def _repository_overview_candidates() -> list[dict]:
     for rs_payload in repo_summary_payloads:
         chunk_id = str(rs_payload.get("chunk_id", "")).strip()
         if chunk_id:
-            chosen.append(rs_payload)
+            prioritized = dict(rs_payload)
+            prioritized["overview_priority"] = 100
+            prioritized["priority"] = 100
+            chosen.append(prioritized)
             seen_chunk_ids.add(chunk_id)
             seen_files.add("__repo_summary__.md")
 

@@ -897,6 +897,252 @@ test('querySessionStream parses NDJSON chunks and invokes callbacks', async () =
   }
 });
 
+const encodeStreamChunks = (chunks) => {
+  let index = 0;
+  return {
+    getReader: () => ({
+      read: async () => index < chunks.length
+        ? { value: typeof chunks[index] === 'string' ? new TextEncoder().encode(chunks[index++]) : chunks[index++], done: false }
+        : { value: undefined, done: true },
+    }),
+  };
+};
+
+const runMockQueryStream = async (chunks, { requestId = 'request-v2' } = {}) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+  const observed = {
+    provisional: '', final: null, rendered: '', sources: [], done: [], errors: [], request: null,
+  };
+  globalThis.fetch = async (_url, options) => {
+    observed.request = options;
+    return { ok: true, body: encodeStreamChunks(chunks) };
+  };
+
+  try {
+    const { querySessionStream } = await import('./api.js');
+    await querySessionStream({
+      question: 'question',
+      session_id: 'session-v2',
+      request_id: requestId,
+      onDelta: (text) => {
+        observed.provisional += text;
+        observed.rendered += text;
+      },
+      onFinalAnswer: (event) => {
+        observed.final = event;
+        observed.rendered = event.text;
+      },
+      onSources: (event) => observed.sources.push(event),
+      onDone: (event) => observed.done.push(event),
+      onError: (message) => observed.errors.push(message),
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    delete globalThis.localStorage;
+  }
+  return observed;
+};
+
+const v2 = (type, fields = {}, requestId = 'request-v2') => JSON.stringify({
+  type,
+  protocol_version: 2,
+  request_id: requestId,
+  ...fields,
+});
+
+test('querySessionStream replaces provisional text with authoritative v2 final text', async () => {
+  const observed = await runMockQueryStream([
+    `${v2('delta', { text: 'The answer is in old_file.py.' })}\n`,
+    `${v2('final_answer', {
+      message_id: 'message-1', text: 'The answer is in corrected_file.py.',
+      generation_status: 'complete', authoritative: true,
+    })}\n`,
+    `${v2('sources', { message_id: 'message-1', sources: [] })}\n`,
+    v2('done', { message_id: 'message-1', status: 'complete' }),
+  ]);
+
+  assert.equal(observed.provisional, 'The answer is in old_file.py.');
+  assert.equal(observed.rendered, 'The answer is in corrected_file.py.');
+  assert.equal(observed.final.message_id, 'message-1');
+  assert.equal(observed.done.length, 1);
+  assert.equal(observed.request.headers['X-Request-Id'], 'request-v2');
+  assert.deepEqual(observed.errors, []);
+});
+
+test('querySessionStream processes final and done records without a trailing newline', async () => {
+  const observed = await runMockQueryStream([
+    `${v2('final_answer', {
+      message_id: 'message-eof', text: 'authoritative', generation_status: 'complete', authoritative: true,
+    })}\n${v2('done', { message_id: 'message-eof', status: 'complete' })}`,
+  ]);
+
+  assert.equal(observed.final.text, 'authoritative');
+  assert.equal(observed.done[0].status, 'complete');
+});
+
+test('querySessionStream handles arbitrary byte boundaries and split UTF-8', async () => {
+  const payload = `${v2('delta', { text: 'Hello 🌍' })}\r\n${v2('final_answer', {
+    message_id: 'unicode', text: 'Hello 🌍', generation_status: 'complete', authoritative: true,
+  })}\r\n${v2('done', { message_id: 'unicode', status: 'complete' })}`;
+  const bytes = new TextEncoder().encode(payload);
+
+  for (let split = 1; split < bytes.length; split += 1) {
+    const observed = await runMockQueryStream([bytes.slice(0, split), bytes.slice(split)]);
+    assert.equal(observed.rendered, 'Hello 🌍');
+    assert.equal(observed.done.length, 1);
+    assert.deepEqual(observed.errors, []);
+  }
+});
+
+test('querySessionStream accepts multiple events and empty transport chunks', async () => {
+  const observed = await runMockQueryStream([
+    new Uint8Array(),
+    `${v2('delta', { text: 'same' })}\n${v2('final_answer', {
+      message_id: 'same', text: 'same', generation_status: 'complete', authoritative: true,
+    })}\n${v2('sources', { message_id: 'same', sources: [{ relative_path: 'a.py' }] })}\n${v2('done', {
+      message_id: 'same', status: 'complete',
+    })}\n`,
+  ]);
+
+  assert.equal(observed.rendered, 'same');
+  assert.equal(observed.sources.length, 1);
+  assert.equal(observed.done.length, 1);
+});
+
+test('querySessionStream rejects v2 success without final_answer', async () => {
+  const observed = await runMockQueryStream([
+    `${v2('delta', { text: 'provisional' })}\n${v2('done', { message_id: null, status: 'complete' })}\n`,
+  ]);
+
+  assert.equal(observed.final, null);
+  assert.equal(observed.errors.length, 1);
+  assert.match(observed.errors[0], /final_answer/i);
+});
+
+test('querySessionStream reports malformed final residue instead of discarding it', async () => {
+  const observed = await runMockQueryStream(['{"type":"done","protocol_version":2']);
+
+  assert.equal(observed.errors.length, 1);
+  assert.match(observed.errors[0], /protocol|malformed/i);
+});
+
+test('querySessionStream skips a malformed middle record and recovers visible content', async () => {
+  const observed = await runMockQueryStream([
+    `not-json\n${v2('final_answer', {
+      message_id: 'recovered', text: 'recovered', generation_status: 'complete', authoritative: true,
+    })}\n${v2('done', { message_id: 'recovered', status: 'complete' })}\n`,
+  ]);
+
+  assert.equal(observed.rendered, 'recovered');
+  assert.deepEqual(observed.errors, []);
+});
+
+test('querySessionStream retains authoritative text but reports missing terminal event', async () => {
+  const observed = await runMockQueryStream([
+    v2('final_answer', {
+      message_id: 'no-done', text: 'saved answer', generation_status: 'complete', authoritative: true,
+    }),
+  ]);
+
+  assert.equal(observed.rendered, 'saved answer');
+  assert.equal(observed.errors.length, 1);
+  assert.match(observed.errors[0], /terminal/i);
+});
+
+test('querySessionStream keeps authoritative partial text and terminal status', async () => {
+  const observed = await runMockQueryStream([
+    `${v2('delta', { text: 'provisional partial' })}\n`,
+    `${v2('final_answer', {
+      message_id: 'partial', text: 'authoritative partial', generation_status: 'partial', authoritative: true,
+    })}\n`,
+    `${v2('done', { message_id: 'partial', status: 'partial' })}\n`,
+  ]);
+
+  assert.equal(observed.rendered, 'authoritative partial');
+  assert.equal(observed.final.generation_status, 'partial');
+  assert.equal(observed.done[0].status, 'partial');
+});
+
+test('querySessionStream error after provisional text never finalizes it', async () => {
+  const observed = await runMockQueryStream([
+    `${v2('delta', { text: 'provisional' })}\n`,
+    `${v2('error', { code: 'generation_failed', message: 'Generation failed.', retryable: false })}\n`,
+    `${v2('done', { message_id: null, status: 'error' })}\n`,
+  ]);
+
+  assert.equal(observed.final, null);
+  assert.equal(observed.errors.length, 1);
+  assert.equal(observed.done[0].status, 'error');
+});
+
+test('querySessionStream handles duplicate and stale terminal events defensively', async () => {
+  const final = v2('final_answer', {
+    message_id: 'message-1', text: 'authoritative', generation_status: 'complete', authoritative: true,
+  });
+  const done = v2('done', { message_id: 'message-1', status: 'complete' });
+  const observed = await runMockQueryStream([
+    `${v2('final_answer', {
+      message_id: 'stale', text: 'stale', generation_status: 'complete', authoritative: true,
+    }, 'older-request')}\n`,
+    `${final}\n${final}\n${v2('sources', { message_id: 'message-1', sources: [] })}\n${v2('sources', {
+      message_id: 'message-1', sources: [],
+    })}\n${done}\n${done}\n`,
+  ]);
+
+  assert.equal(observed.rendered, 'authoritative');
+  assert.equal(observed.sources.length, 1);
+  assert.equal(observed.done.length, 1);
+  assert.deepEqual(observed.errors, []);
+});
+
+test('querySessionStream rejects a conflicting second final answer', async () => {
+  const observed = await runMockQueryStream([
+    `${v2('final_answer', {
+      message_id: 'message-1', text: 'first', generation_status: 'complete', authoritative: true,
+    })}\n${v2('final_answer', {
+      message_id: 'message-1', text: 'conflict', generation_status: 'complete', authoritative: true,
+    })}\n`,
+  ]);
+
+  assert.equal(observed.rendered, 'first');
+  assert.equal(observed.errors.length, 1);
+  assert.match(observed.errors[0], /conflicting/i);
+});
+
+test('querySessionStream reports connected cancellation as terminal without a final answer', async () => {
+  const observed = await runMockQueryStream([
+    `${v2('error', { code: 'cancelled', message: 'Generation was cancelled.', retryable: false })}\n`,
+    v2('done', { message_id: null, status: 'cancelled' }),
+  ]);
+
+  assert.equal(observed.final, null);
+  assert.equal(observed.errors.length, 1);
+  assert.equal(observed.done[0].status, 'cancelled');
+});
+
+test('querySessionStream preserves authoritative whitespace and Markdown', async () => {
+  const text = '  **authoritative**\n\n- item  ';
+  const observed = await runMockQueryStream([
+    `${v2('final_answer', {
+      message_id: 'formatted', text, generation_status: 'complete', authoritative: true,
+    })}\n${v2('done', { message_id: 'formatted', status: 'complete' })}`,
+  ]);
+
+  assert.equal(observed.rendered, text);
+});
+
+test('querySessionStream preserves legacy v1 delta completion', async () => {
+  const observed = await runMockQueryStream([
+    '{"type":"delta","text":"  **legacy**  "}\n{"type":"done"}',
+  ]);
+
+  assert.equal(observed.rendered, '  **legacy**  ');
+  assert.equal(observed.final, null);
+  assert.equal(observed.done.length, 1);
+  assert.deepEqual(observed.errors, []);
+});
+
 test('createProviderCredential skips encryption in local mode', async () => {
   const originalFetch = globalThis.fetch;
   let calledOptions = null;

@@ -10,7 +10,6 @@ from retrieval.generation.assembler import assemble, assemble_for_reasoning, int
 from retrieval.generation.code_answers import (
     build_architecture_answer,
     build_docs_summary_answer,
-    build_code_answer,
     build_code_snippet_answer,
     collect_rendered_code_snippet_sources,
     build_flow_answer,
@@ -30,6 +29,11 @@ from retrieval.generation.code_answers import (
     rank_follow_up_sources_for_explanation,
 )
 from retrieval.generation.answer_validation import validate_generated_answer
+from retrieval.generation.evidence_authority import (
+    canonical_source_path,
+    citation_diagnostics,
+    reconcile_display_sources,
+)
 from retrieval.config import (
     CONVERSATION_HISTORY_TURNS,
     DISPLAY_SOURCES_CAP,
@@ -46,14 +50,18 @@ from retrieval.memory.follow_up_memory import (
     analyze_topic_shift,
     build_recent_entity_set,
     extract_cited_entities,
-    is_vague_follow_up_query,
-    latest_rendered_entity_set,
     rewrite_follow_up_query,
 )
-from retrieval.generation.llm import generate_answer, generate_answer_stream
+from retrieval.generation.llm import (
+    GenerationOutcome,
+    GenerationOutcomeError,
+    generate_answer,
+    generate_answer_stream,
+    generate_conversational_answer,
+)
 from retrieval.memory.memory import ConversationMemory, prepare_history_block
 from retrieval.support.observability import StageMetrics, log_event, new_request_id
-from retrieval.query.query_processor import process_query
+from retrieval.query.query_processor import apply_active_index_hints, process_query
 from retrieval.support.isolation import validate_collection_binding
 from retrieval.query.query_intent import is_source_location_query
 from retrieval.search.searcher import (
@@ -71,32 +79,6 @@ from retrieval.search.source_filter import (
     apply_feature_location_gate,
 )
 
-
-FOLLOW_UP_MARKERS = {
-    "also",
-    "again",
-    "same",
-    "code",
-    "snippet",
-    "implementation",
-    "example",
-    "expand",
-    "more",
-    "details",
-    "it",
-    "its",
-    "that",
-    "those",
-    "this",
-    "these",
-    "they",
-    "them",
-    "there",
-    "then",
-    "above",
-    "previous",
-    "continue",
-}
 
 LOW_CONTEXT_FALLBACK = (
     "I could not find strong evidence for that in the indexed repository context.\n\n"
@@ -120,6 +102,22 @@ WEAK_EVIDENCE_BANNER = (
 
 LOW_CONFIDENCE_TOP_SCORE_THRESHOLD = 0.55
 LOW_CONFIDENCE_MIN_CANDIDATES = 2
+
+_ABSENCE_FEATURE_TERMS = (
+    "backtesting",
+    "historical simulation",
+    "risk management",
+    "position sizing",
+    "data preprocessing",
+)
+
+
+def _absence_feature_label(query: str) -> str:
+    lowered = query.lower()
+    for term in _ABSENCE_FEATURE_TERMS:
+        if term in lowered:
+            return term
+    return "the requested advanced feature"
 
 
 def _count_history_turns(history_block: str) -> int:
@@ -548,9 +546,6 @@ def _strong_new_entities(query_info: dict) -> list[str]:
     return values[:10]
 
 
-REWRITE_BLOCKED_INTENTS = {"CODE_REQUEST", "TRACE", "CONFIG", "ARCHITECTURE", "OVERVIEW", "FILE"}
-
-
 def should_include_history(
     query_info: dict,
     *,
@@ -656,39 +651,83 @@ class PostProcessingMemoryProxy:
         self._raw_query = raw_query
         self.last_answer = None
         self.last_sources = None
+        self.last_reasoning_sources = None
+        self.last_citation_resolution = None
 
     def add(self, query, answer, resolved_query=None, *, entities=None, primary_intent=""):
         import sys
-        # 1. Dynamically retrieve shown_sources or response_sources from caller's local scope
+        # Source cards are presentation; only evidence supplied to generation is authorized.
         caller_frame = sys._getframe(1)
         caller_locals = caller_frame.f_locals
-        sources = caller_locals.get("response_sources") or caller_locals.get("shown_sources") or []
+        display_sources = (
+            caller_locals.get("display_priority_sources")
+            or caller_locals.get("response_sources")
+            or caller_locals.get("shown_sources")
+            or []
+        )
+        reasoning_sources = (
+            caller_locals.get("generation_evidence_sources")
+            or display_sources
+        )
         response_mode = caller_locals.get("response_mode") or caller_locals.get("meta", {}).get("response_mode", "")
         query_info = caller_locals.get("query_info")
 
         # 2. Apply post-processing
-        post_processed_ans, final_sources = post_process_answer_and_sources(answer, sources, self._raw_query, primary_intent=primary_intent)
+        post_processed_ans, _ = post_process_answer_and_sources(
+            answer,
+            reasoning_sources,
+            self._raw_query,
+            primary_intent=primary_intent,
+        )
 
         validation = validate_generated_answer(
             answer=post_processed_ans,
             raw_query=self._raw_query,
             response_mode=str(response_mode or ""),
-            allowed_sources=list(sources),
-            final_sources=list(final_sources),
+            allowed_sources=list(reasoning_sources),
+            final_sources=list(display_sources),
             query_info=query_info if isinstance(query_info, dict) else None,
         )
         self.last_validation = validation
-        post_processed_ans = validation.get("repaired_answer") or post_processed_ans
-        repaired_sources = validation.get("repaired_sources")
-        if repaired_sources is not None:
-            final_sources = repaired_sources
+        if "repaired_answer" in validation:
+            post_processed_ans = validation["repaired_answer"]
+
+        if not str(post_processed_ans or "").strip():
+            raise GenerationOutcomeError(
+                GenerationOutcome(status="empty", error_code="validation_failed"),
+                "Generated answer failed evidence validation.",
+            )
+
+        supplemental_sources = validation.get("repaired_sources")
+        if supplemental_sources is None:
+            supplemental_sources = display_sources
+        final_sources, resolution = reconcile_display_sources(
+            post_processed_ans,
+            list(reasoning_sources),
+            list(supplemental_sources),
+            preserve_source_chunks=str(response_mode or "") in {
+                "architecture_summary",
+                "code_excerpt",
+                "code_snippet",
+                "flow_summary",
+                "source_location",
+            },
+        )
 
         self.last_answer = post_processed_ans
         self.last_sources = final_sources
+        self.last_reasoning_sources = list(reasoning_sources)
+        self.last_citation_resolution = citation_diagnostics(resolution)
 
         # 3. Re-calculate entities using the final pruned sources
         from retrieval.memory.follow_up_memory import extract_cited_entities
-        new_entities = extract_cited_entities(final_sources)
+        cited_paths = set(resolution.get("resolved_paths") or [])
+        cited_sources = [
+            source
+            for source in final_sources
+            if canonical_source_path(source.get("relative_path")) in cited_paths
+        ]
+        new_entities = extract_cited_entities(cited_sources or final_sources)
 
         # 4. Save to target memory/database
         self._target.add(
@@ -1171,11 +1210,38 @@ def run_query(
     )
     final_answer = proxy_memory.last_answer if proxy_memory.last_answer is not None else res[0]
     final_sources = proxy_memory.last_sources if proxy_memory.last_sources is not None else res[1]
+    result_meta = res[3] if return_meta else None
+    if not str(final_answer or "").strip():
+        outcome_meta = result_meta.get("generation_outcome", {}) if isinstance(result_meta, dict) else {}
+        status = str(outcome_meta.get("status") or "empty")
+        outcome = GenerationOutcome(
+            status=status,
+            fallback_used=bool(outcome_meta.get("fallback_used", False)),
+            error_code=str(outcome_meta.get("error_code") or "no_visible_text"),
+        )
+        if isinstance(result_meta, dict):
+            result_meta["generation_outcome"] = outcome.metadata()
+            result_meta["evidence_confidence"] = {
+                "level": "weak",
+                "reason": "generation_failed",
+            }
+        raise GenerationOutcomeError(outcome)
     
     if return_meta:
         answer, sources, token_count, meta = res
+        meta["display_sources"] = list(final_sources)
+        if proxy_memory.last_reasoning_sources is not None:
+            meta["reasoning_sources"] = list(proxy_memory.last_reasoning_sources)
+        if proxy_memory.last_citation_resolution is not None:
+            meta["citation_resolution"] = dict(proxy_memory.last_citation_resolution)
+        meta["source_alignment"] = _collect_source_alignment_diagnostics(
+            display_sources=list(final_sources),
+            reasoning_sources=list(meta.get("reasoning_sources") or final_sources),
+            rendered_sources=list(final_sources),
+        )
         if "evaluation" in meta:
             meta["evaluation"]["display_sources"] = list(final_sources)
+            meta["evaluation"]["reasoning_sources"] = list(meta.get("reasoning_sources") or [])
         return final_answer, final_sources, token_count, meta
     else:
         answer, sources, token_count = res
@@ -1252,13 +1318,10 @@ def _run_query_impl(
 ) -> tuple[str, list[dict], int] | tuple[str, list[dict], int, dict]:
     """Run one retrieval query end-to-end (implementation)."""
     rid = request_id or new_request_id()
-    if stream_handler:
-        stream_handler.on_status("Retrieving relevant code...")
     metrics = StageMetrics(request_id=rid)
     meta: dict = {"request_id": rid}
     evaluation = meta.setdefault("evaluation", {}) if capture_eval else None
     log_event("retrieval.request.start", rid, query=raw_query)
-    validate_collection_binding(get_collection_name(), get_repo_root())
     started = time.perf_counter()
     explicit_non_impl_request = query_explicitly_requests_non_implementation_artifacts(raw_query)
     history_block = memory.get_history_block()  # full, for search/follow-up rewrite
@@ -1268,14 +1331,7 @@ def _run_query_impl(
     started = time.perf_counter()
     # WS7: load recent cited entities and pass them into query resolution.
     recent_turns = memory.recent_turn_entities(max_turns=8) if hasattr(memory, "recent_turn_entities") else []
-    active_index_paths = None
-    try:
-        from retrieval.search.searcher import _get_lexical_index
-        idx = _get_lexical_index(get_collection_name())
-        active_index_paths = {doc.payload.get("relative_path") for doc in idx.documents if doc.payload.get("relative_path")}
-    except Exception:
-        pass
-    query_info = _resolve_query_info(raw_query, memory, recent_turns=recent_turns, active_index_paths=active_index_paths)
+    query_info = _resolve_query_info(raw_query, memory, recent_turns=recent_turns)
     metrics.add_stage("query_processor", started)
     # Resolve intent early so the history cap can be applied before assembly.
     primary_intent = query_info.get("primary_intent") or query_info.get("intent")
@@ -1287,6 +1343,148 @@ def _run_query_impl(
         graph_retrieval_mode=graph_retrieval_mode,
         query_info=query_info,
     )
+    if primary_intent in ("OUT_OF_SCOPE", "ABSENCE_CHECK"):
+        if primary_intent == "ABSENCE_CHECK":
+            if stream_handler:
+                stream_handler.on_status("Checking repository implementation...")
+            feature = _absence_feature_label(raw_query)
+            answer = (
+                "Based on a comprehensive scan of the repository, there is no "
+                f"implementation of {feature} in this codebase. The system currently "
+                "operates without this automated logic."
+            )
+            response_sources: list[dict] = []
+            shown_sources: list[dict] = []
+            response_mode = "absence_check"
+            token_count = 0
+            meta.update(
+                {
+                    "response_mode": response_mode,
+                    "source_filter": {"bypassed": "absence_check"},
+                    "display_sources": [],
+                    "reasoning_sources": [],
+                    "evidence_confidence": {"level": "not_applicable", "count": 0},
+                    "llm_selection": {},
+                    "stage_latency_ms": metrics.stage_latency_ms,
+                    "total_latency_ms": metrics.total_ms(),
+                    "backend_latency_ms": metrics.total_ms(),
+                    "provider_latency_ms": 0,
+                    "errors": metrics.errors,
+                }
+            )
+            memory.add(
+                raw_query,
+                answer,
+                resolved_query=str(query_info.get("raw_query") or raw_query),
+                entities={},
+                primary_intent="ABSENCE_CHECK",
+            )
+            if stream_handler:
+                for index in range(0, len(answer), 8):
+                    if abort_event and abort_event.is_set():
+                        break
+                    stream_handler.on_delta(answer[index:index + 8])
+            log_event(
+                "retrieval.request.end",
+                rid,
+                status="ok",
+                stage_latency_ms=metrics.stage_latency_ms,
+                total_latency_ms=metrics.total_ms(),
+                candidates=0,
+                expanded=0,
+                shown_sources=0,
+                response_mode=response_mode,
+                source_filter=meta["source_filter"],
+            )
+            if return_meta:
+                return answer, response_sources, token_count, meta
+            return answer, response_sources, token_count
+
+        if stream_handler:
+            stream_handler.on_status("Responding conversationally...")
+        started = time.perf_counter()
+        conversation_history = prepare_history_block(
+            history_block,
+            max_turns=MAX_HISTORY_TURNS_FOR_FOLLOWUP,
+            max_tokens=intent_history_cap(primary_intent),
+        )
+        llm_selection: dict[str, object] = {}
+        answer = generate_conversational_answer(
+            raw_query,
+            conversation_history,
+            provider_config=provider_config,
+            query_info=query_info,
+            selection_meta=llm_selection,
+        )
+        metrics.add_stage("llm", started)
+        response_sources: list[dict] = []
+        shown_sources: list[dict] = []
+        response_mode = "chitchat"
+        token_count = 0
+        meta.update(
+            {
+                "response_mode": response_mode,
+                "source_filter": {"bypassed": "out_of_scope"},
+                "display_sources": [],
+                "reasoning_sources": [],
+                "evidence_confidence": {"level": "not_applicable", "count": 0},
+                "llm_selection": llm_selection,
+                "stage_latency_ms": metrics.stage_latency_ms,
+                "total_latency_ms": metrics.total_ms(),
+                "backend_latency_ms": max(
+                    0, metrics.total_ms() - metrics.stage_latency_ms.get("llm", 0)
+                ),
+                "provider_latency_ms": metrics.stage_latency_ms.get("llm", 0),
+                "errors": metrics.errors,
+            }
+        )
+        memory.add(
+            raw_query,
+            answer,
+            resolved_query=str(query_info.get("raw_query") or raw_query),
+            entities={},
+            primary_intent="OUT_OF_SCOPE",
+        )
+        if stream_handler:
+            for index in range(0, len(answer), 8):
+                if abort_event and abort_event.is_set():
+                    break
+                stream_handler.on_delta(answer[index:index + 8])
+        log_event(
+            "retrieval.request.end",
+            rid,
+            status="ok",
+            stage_latency_ms=metrics.stage_latency_ms,
+            total_latency_ms=metrics.total_ms(),
+            candidates=0,
+            expanded=0,
+            shown_sources=0,
+            response_mode=response_mode,
+            source_filter=meta["source_filter"],
+        )
+        if return_meta:
+            return answer, response_sources, token_count, meta
+        return answer, response_sources, token_count
+
+    if stream_handler:
+        stream_handler.on_status("Retrieving relevant code...")
+    validate_collection_binding(get_collection_name(), get_repo_root())
+    try:
+        from retrieval.search.searcher import _get_lexical_index
+
+        index = _get_lexical_index(get_collection_name())
+        active_index_paths = {
+            document.payload.get("relative_path")
+            for document in index.documents
+            if document.payload.get("relative_path")
+        }
+        apply_active_index_hints(
+            str(query_info.get("raw_query") or raw_query),
+            query_info["entities"],
+            active_index_paths,
+        )
+    except Exception:
+        pass
     history_cap = intent_history_cap(primary_intent)
     include_history = should_include_history(
         query_info,
@@ -1538,16 +1736,16 @@ def _run_query_impl(
             "after_paths": post_alignment_display_paths,
         }
     shown_sources = display_sources
-    follow_up_anchor_paths = {
+    followup_anchor_paths = {
         str(path).lower()
-        for path in (query_info.get("follow_up_anchor_paths") or [])
+        for path in (query_info.get("followup_anchor_paths") or [])
         if str(path).strip()
     }
-    if follow_up_anchor_paths and is_vague_follow_up_query(raw_query):
+    if followup_anchor_paths and query_info.get("query_rewritten"):
         def _restrict_to_anchor_family(items: list[dict]) -> list[dict]:
             restricted = [
                 src for src in items
-                if str(src.get("relative_path", "")).lower() in follow_up_anchor_paths
+                if str(src.get("relative_path", "")).lower() in followup_anchor_paths
             ]
             return restricted or items
 
@@ -1902,20 +2100,20 @@ def _run_query_impl(
         return_blocks=capture_eval,
     )
     if len(reasoning_assemble_result) == 4:
-        reasoning_context, _, reasoning_token_count, reasoning_context_blocks = reasoning_assemble_result
+        reasoning_context, assembled_reasoning_sources, reasoning_token_count, reasoning_context_blocks = reasoning_assemble_result
     else:
-        reasoning_context, _, reasoning_token_count = reasoning_assemble_result
+        reasoning_context, assembled_reasoning_sources, reasoning_token_count = reasoning_assemble_result
         reasoning_context_blocks = []
     if evaluation is not None:
         evaluation["display_sources"] = list(display_sources)
-        evaluation["reasoning_sources"] = list(reasoning_sources)
+        evaluation["reasoning_sources"] = list(assembled_reasoning_sources)
         evaluation["deterministic_context"] = context
         evaluation["deterministic_context_blocks"] = list(context_blocks)
         evaluation["reasoning_context"] = reasoning_context
         evaluation["reasoning_context_blocks"] = list(reasoning_context_blocks)
         evaluation["reasoning_context_token_count"] = int(reasoning_token_count)
     meta["display_sources"] = list(display_sources)
-    meta["reasoning_sources"] = list(reasoning_sources)
+    meta["reasoning_sources"] = list(assembled_reasoning_sources)
     from retrieval.generation.code_answers import is_file_summary_request, build_file_summary_answer, is_symbol_behavior_request, is_usage_example_request
     if is_file_summary_request(raw_query) and not is_symbol_behavior_request(raw_query) and not is_usage_example_request(raw_query):
         started = time.perf_counter()
@@ -2641,6 +2839,11 @@ def _run_query_impl(
                     "support_kind": support.get("support_kind", ""),
                 }
             )
+    display_priority_sources = list(response_sources)
+    generation_evidence_sources = _merge_sources_by_key(
+        assembled_reasoning_sources,
+        support_blocks,
+    )
     llm_backend_started_ms = metrics.total_ms()
     started = time.perf_counter()
     llm_selection: dict[str, object] = {}
@@ -2657,7 +2860,7 @@ def _run_query_impl(
             raw_query,
             reasoning_context,          # broader context for synthesis
             history_block_prompt,
-            allowed_sources=response_sources,  # display_sources — strict citation list
+            allowed_sources=generation_evidence_sources,
             extra_context_blocks=extra_context_blocks,
             provider_config=provider_config,
             query_info=query_info,
@@ -2669,12 +2872,20 @@ def _run_query_impl(
             stream_handler.on_delta(chunk)
             answer_chunks.append(chunk)
         answer = "".join(answer_chunks)
+        if abort_event and abort_event.is_set():
+            outcome = GenerationOutcome(
+                visible_text=answer,
+                status="cancelled",
+                error_code="cancelled",
+            )
+            llm_selection["generation_outcome"] = outcome.metadata()
+            raise GenerationOutcomeError(outcome, "Generation was cancelled.")
     else:
         answer = generate_answer(
             raw_query,
             reasoning_context,          # broader context for synthesis
             history_block_prompt,
-            allowed_sources=response_sources,  # display_sources — strict citation list
+            allowed_sources=generation_evidence_sources,
             extra_context_blocks=extra_context_blocks,
             provider_config=provider_config,
             query_info=query_info,
@@ -2682,20 +2893,28 @@ def _run_query_impl(
             selection_meta=llm_selection,
         )
 
+    generation_outcome = dict(llm_selection.get("generation_outcome") or {})
+    if generation_outcome.get("status") == "partial":
+        evidence_confidence = {
+            **evidence_confidence,
+            "level": "partial",
+            "reason": "provider_stream_interrupted_after_visible_text",
+        }
+    meta["generation_outcome"] = generation_outcome
     token_count = reasoning_token_count
     metrics.add_stage("llm", started)
     answer, response_sources = post_process_answer_and_sources(
         answer,
-        response_sources,
+        generation_evidence_sources,
         raw_query,
         primary_intent=primary_intent,
     )
-    final_reasoning_sources = _merge_sources_by_key(reasoning_sources, response_sources)
+    response_sources = list(display_priority_sources)
     meta["display_sources"] = list(response_sources)
-    meta["reasoning_sources"] = list(final_reasoning_sources)
+    meta["reasoning_sources"] = list(generation_evidence_sources)
     meta["source_alignment"] = _collect_source_alignment_diagnostics(
         display_sources=response_sources,
-        reasoning_sources=final_reasoning_sources,
+        reasoning_sources=generation_evidence_sources,
         rendered_sources=response_sources,
     )
     # Prepend evidence-quality banner when confidence is weak or partial.
@@ -2777,10 +2996,7 @@ def _resolve_query_info(
     detects topic shifts, and produces a resolved query that replaces vague
     pronoun references with concrete entity names before retrieval.
     """
-    query_info = process_query(raw_query, active_index_paths=active_index_paths)
     recent_turns = recent_turns or []
-
-    # --- Topic-shift detection (WS7) ---
     recent_entity_set = build_recent_entity_set(recent_turns, max_turns=8)
     latest_rendered_sources = []
     if hasattr(memory, "latest_rendered_sources"):
@@ -2792,6 +3008,48 @@ def _resolve_query_info(
         extract_cited_entities(latest_rendered_sources) if latest_rendered_sources else {}
     )
     previous_query = memory.latest_query().strip()
+    previous_resolved_query = memory.latest_resolved_query().strip()
+    followup_entity_set = latest_entity_set or recent_entity_set
+    anchor_query = previous_resolved_query or previous_query
+    conversation_state = {
+        "previous_files": followup_entity_set.get("files", []),
+        "previous_symbols": followup_entity_set.get("symbols", []),
+        "previous_query": previous_query,
+    }
+    if followup_entity_set.get("routes"):
+        conversation_state["previous_routes"] = followup_entity_set["routes"]
+    if followup_entity_set.get("env_keys"):
+        conversation_state["previous_env_keys"] = followup_entity_set["env_keys"]
+
+    memory_rewrite = rewrite_follow_up_query(
+        raw_query,
+        followup_entity_set,
+        previous_resolved_query=anchor_query,
+    )
+    resolved_query = str(memory_rewrite["resolved_query"] or raw_query).strip()
+    query_info = process_query(
+        resolved_query,
+        active_index_paths=active_index_paths,
+        original_query=raw_query,
+    )
+    query_info["user_query"] = raw_query.strip()
+    query_info["conversation_state"] = conversation_state
+    query_info["memory_rewrite"] = dict(memory_rewrite)
+    query_info["query_rewritten"] = resolved_query != raw_query.strip()
+    query_info["rewrite_mode"] = str(memory_rewrite.get("rewrite_mode") or "none")
+    query_info["rewrite_anchor"] = anchor_query or None
+    query_info["followup_anchor"] = memory_rewrite.get("followup_anchor")
+    query_info["followup_anchor_entities"] = (
+        dict(followup_entity_set) if memory_rewrite.get("followup_anchor") else {}
+    )
+    if memory_rewrite.get("followup_anchor") and latest_entity_set:
+        query_info["followup_anchor_paths"] = list(latest_entity_set.get("files", []))
+        query_info["followup_anchor_symbols"] = list(latest_entity_set.get("symbols", []))
+    if previous_query:
+        query_info["follow_up_to"] = previous_query
+        query_info["follow_up_resolved_to"] = anchor_query
+
+    # Topic-shift detection runs after the final extraction input is resolved.
     topic_analysis = analyze_topic_shift(
         raw_query,
         query_info.get("entities", {}),
@@ -2808,140 +3066,32 @@ def _resolve_query_info(
     query_info["has_valid_referent"] = bool(topic_analysis.get("has_valid_referent", False))
     query_info["topic_shift_reason"] = str(topic_analysis.get("reason") or "")
 
-    # Calculate is_followup and is_low_context using state
     from retrieval.query.query_intent import identify_followup_or_low_context
-    followup_entity_set = latest_entity_set or recent_entity_set
-    conversation_state = {
-        "previous_files": followup_entity_set.get("files", []),
-        "previous_symbols": followup_entity_set.get("symbols", []),
-        "previous_query": memory.latest_query()
-    }
-    if followup_entity_set.get("routes"):
-        conversation_state["previous_routes"] = followup_entity_set.get("routes", [])
-    if followup_entity_set.get("env_keys"):
-        conversation_state["previous_env_keys"] = followup_entity_set.get("env_keys", [])
     is_followup_detected, is_low_context_detected = identify_followup_or_low_context(raw_query, conversation_state)
+    query_info["is_followup"] = bool(
+        (is_followup_detected or query_info["query_rewritten"]) and not topic_shift
+    )
+    if query_info.get("primary_intent") in ("OUT_OF_SCOPE", "ABSENCE_CHECK"):
+        return query_info
 
-    query_info["is_followup"] = bool(is_followup_detected and not topic_shift)
-    query_info["conversation_state"] = conversation_state
     from retrieval.generation.code_answers import is_code_request
     from retrieval.query.query_intent import is_explanation_query, is_source_location_query
-    if is_explanation_query(raw_query):
+    if is_explanation_query(resolved_query):
         query_info["primary_intent"] = "EXPLANATION"
         if "intent" in query_info:
             query_info["intent"] = "EXPLANATION"
-    elif is_source_location_query(raw_query):
+    elif is_source_location_query(resolved_query):
         query_info["primary_intent"] = "FILE"
         if "intent" in query_info:
             query_info["intent"] = "FILE"
-    elif not is_code_request(raw_query):
+    elif not is_code_request(resolved_query):
         if query_info.get("primary_intent") == "CODE_REQUEST":
             query_info["primary_intent"] = "SEMANTIC"
         if query_info.get("intent") == "CODE_REQUEST":
             query_info["intent"] = "SEMANTIC"
     elif is_low_context_detected:
         query_info["primary_intent"] = "LOW_CONTEXT"
-
-    query_info["query_rewritten"] = False
-    query_info["rewrite_mode"] = "none"
-    query_info["rewrite_anchor"] = None
-
-    # If topic shift detected, skip follow-up rewriting so old entities
-    # don't pollute a genuinely new question.
-    if topic_shift:
-        return query_info
-
-    explicit_non_impl_request = query_explicitly_requests_non_implementation_artifacts(raw_query)
-    previous_resolved_query = memory.latest_resolved_query().strip()
-    if not previous_query:
-        return query_info
-
-    anchor_query = previous_resolved_query or previous_query
-    query_info["follow_up_to"] = previous_query
-    query_info["follow_up_resolved_to"] = anchor_query
-    query_info["user_query"] = raw_query.strip()
-    query_info["rewrite_anchor"] = anchor_query
-
-    if not _should_rewrite_follow_up(raw_query, query_info, memory):
-        return query_info
-
-    blocked_by_intent = _rewrite_blocked_by_intent(query_info)
-    hint_result = {
-        "raw_query": raw_query.strip(),
-        "followup_hint": None,
-        "rewrite_mode": "none",
-        "rewrite_anchor": anchor_query,
-    }
-    if not blocked_by_intent:
-        hint_result = rewrite_follow_up_query(
-            raw_query,
-            followup_entity_set,
-            previous_resolved_query=anchor_query,
-        )
-
-    combined_info = dict(query_info)
-    combined_info["is_followup"] = bool(is_followup_detected and not topic_shift and not explicit_non_impl_request)
-    if is_vague_follow_up_query(raw_query) and latest_entity_set and not explicit_non_impl_request:
-        combined_info["follow_up_anchor_paths"] = list(latest_entity_set.get("files", []) or [])
-        combined_info["follow_up_anchor_symbols"] = list(latest_entity_set.get("symbols", []) or [])
-    if is_low_context_detected and not is_explanation_query(raw_query):
-        combined_info["primary_intent"] = "LOW_CONTEXT"
-
-    combined_info["follow_up_to"] = previous_query
-    combined_info["follow_up_resolved_to"] = anchor_query
-    combined_info["user_query"] = raw_query.strip()
-    combined_info["topic_shift"] = False
-    combined_info["followup_hint"] = hint_result.get("followup_hint")
-    combined_info["followup_hint_entities"] = dict(followup_entity_set) if hint_result.get("followup_hint") else {}
-    combined_info["query_rewritten"] = False
-    combined_info["rewrite_mode"] = str(hint_result.get("rewrite_mode") or "none")
-    combined_info["rewrite_anchor"] = str(hint_result.get("rewrite_anchor") or "").strip() or None
-    combined_info["conversation_state"] = conversation_state
-    return combined_info
-
-
-def _should_rewrite_follow_up(
-    raw_query: str, query_info: dict, memory: ConversationMemory
-) -> bool:
-    if not memory.turns:
-        return False
-
-    if query_explicitly_requests_non_implementation_artifacts(raw_query):
-        return False
-
-    if _rewrite_blocked_by_intent(query_info):
-        return False
-
-    intent_scores = query_info.get("intent_scores") if isinstance(query_info.get("intent_scores"), dict) else {}
-    if float(intent_scores.get("FOLLOWUP", 0.0) or 0.0) < HISTORY_INJECT_THRESHOLD:
-        return False
-
-    entities = query_info.get("entities", {})
-    if entities.get("symbols") or entities.get("files"):
-        return False
-
-    lowered = raw_query.strip().lower()
-    if not lowered:
-        return False
-
-    if is_vague_follow_up_query(lowered):
-        return True
-
-    tokens = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", lowered)
-    if len(tokens) <= 4:
-        return True
-
-    return any(token in FOLLOW_UP_MARKERS for token in tokens if token not in {"code", "snippet"})
-
-
-def _rewrite_blocked_by_intent(query_info: dict) -> bool:
-    primary_intent = str(query_info.get("primary_intent") or query_info.get("intent") or "").upper()
-    if primary_intent in REWRITE_BLOCKED_INTENTS:
-        return True
-    if primary_intent == "SYMBOL":
-        entities = query_info.get("entities", {})
-        return bool(entities.get("symbols"))
-    return False
+    return query_info
 
 
 def _merge_entity_lists(base: list[str], extra: list[str]) -> list[str]:

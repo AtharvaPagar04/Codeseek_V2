@@ -14,9 +14,20 @@ An in-process `ConversationMemory` implementation is also available for direct r
 
 ## Follow-Up Resolution
 
-Before retrieval, the pipeline compares the current query with recent queries and entities. It uses embedding similarity when available, otherwise keyword overlap.
+Before entity extraction and intent classification, the pipeline evaluates the
+current query against recent queries and entities. It uses embedding similarity
+when available, otherwise keyword overlap.
 
-Vague references such as "it", "that", or "same function" can receive a soft anchor from the most recent rendered files or symbols. Strong new entities, low similarity, or blocked intents mark a topic shift and prevent old context from controlling retrieval.
+For a vague follow-up with a recent entity, `rewrite_follow_up_query()` replaces
+pronouns such as "it", "that", or "they" with the most salient rendered entity.
+If no replaceable pronoun is present, the entity is appended as an anchor. The
+resolved query is then the only query passed to symbol/file extraction and
+intent scoring; the original user text remains available for display and
+diagnostics.
+
+Topic-shift detection runs after this extraction input has been resolved.
+Strong new entities or low similarity mark a topic shift and prevent old context
+from controlling retrieval.
 
 Previous-file candidates are injected only for sufficiently confident follow-ups and are capped and penalized relative to current-query evidence.
 

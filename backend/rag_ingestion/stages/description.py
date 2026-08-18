@@ -19,7 +19,6 @@ from rag_ingestion.config import (
 from rag_ingestion.models.chunk import Chunk
 from retrieval.config import (
     LOCAL_LLM_BASE_URL,
-    LOCAL_LLM_PRIMARY_MODEL,
     LOCAL_LLM_TIMEOUT_SECONDS,
 )
 
@@ -83,10 +82,6 @@ class ChunkEnrichment:
 
 def _is_local_provider(provider_config: dict | None) -> bool:
     return ((provider_config or {}).get("provider") or "").strip().lower() == "local"
-
-
-def _is_auto_model(model: str | None) -> bool:
-    return ((model or "").strip().lower()) in {"", "auto", "default"}
 
 
 def _resolve_local_description_model(provider_config: dict | None) -> str:
