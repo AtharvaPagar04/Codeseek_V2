@@ -2,78 +2,50 @@ from __future__ import annotations
 
 import re
 
-# Query vocabulary mapped to likely free-text labels produced during ingestion.
+# Query vocabulary mapped to retrieval hints emitted by semantic ingestion.
+# Each pattern can contribute labels as well as concrete routes and file hints.
 SEMANTIC_KEYWORDS_MAP = {
-    r"\b(auth|authentication|login|signin|oauth|token|jwt)\b": [
-        "auth",
-        "jwt",
-        "session",
-        "token-validation",
-        "security",
-        "rbac",
-    ],
-    r"\b(cache|caching|redis|ttl|expire|expiration)\b": [
-        "caching",
-        "redis",
-        "ttl",
-        "memoization",
-        "rate-limiting",
-    ],
-    r"\b(pagination|cursor|limit|offset)\b": [
-        "pagination",
-        "cursor",
-        "offset",
-    ],
-    r"\b(retrieval|retrieve|search|rerank|ranking)\b": [
-        "retrieval",
-        "hybrid-search",
-        "semantic-search",
-        "vector-scoring",
-        "reranking",
-    ],
-    r"\b(ingestion|ingest|indexing|chunking|parser|embedding)\b": [
-        "ingestion",
-        "repository-indexing",
-        "code-chunking",
-        "ast-parser",
-        "embedding-generation",
-    ],
-    r"\b(qdrant|upsert|vector\s+(?:db|database|store)|chunk\s+storage)\b": [
-        "qdrant",
-        "vector-storage",
-        "vector-upsert",
-        "vector-search",
-    ],
-    r"\b(config|configuration|settings|environment|env)\b": [
-        "configuration",
-        "environment-variables",
-        "runtime-settings",
-    ],
-    r"\b(provider|providers|api\s+key|credentials)\b": [
-        "provider-management",
-        "credential-storage",
-        "model-routing",
-    ],
-    r"\b(frontend|ui|component|react|rendering)\b": [
-        "frontend",
-        "ui-rendering",
-        "react-component",
-    ],
-    r"\b(test|tests|testing|pytest|unittest)\b": [
-        "testing",
-        "unit-testing",
-        "integration-testing",
-    ],
-    r"\b(devops|docker|dockerfile|deploy|deployment|ci|cd)\b": [
-        "containerization",
-        "deployment",
-        "continuous-integration",
-    ],
-    r"\b(source\s+filtering|context\s+pruning|display\s+sources?)\b": [
-        "source-filtering",
-        "context-pruning",
-        "evidence-selection",
-    ],
+    r"\b(login|signin|auth\s+endpoint)\b": {
+        "semantic_labels": ["auth", "jwt", "session", "token-validation"],
+        "api_routes": ["/api/v1/auth/login", "/api/v1/sessions"],
+        "files": ["backend/auth/router.py"],
+    },
+    r"\b(auth|authentication|oauth|token|jwt)\b": {
+        "semantic_labels": ["auth", "jwt", "session", "token-validation", "security", "rbac"],
+    },
+    r"\b(cache|caching|redis|ttl|expire|expiration)\b": {
+        "semantic_labels": ["caching", "redis", "ttl", "memoization", "rate-limiting"],
+    },
+    r"\b(pagination|cursor|limit|offset)\b": {
+        "semantic_labels": ["pagination", "cursor", "offset"],
+    },
+    r"\b(retrieval|retrieve|search|rerank|ranking)\b": {
+        "semantic_labels": ["retrieval", "hybrid-search", "semantic-search", "vector-scoring", "reranking"],
+    },
+    r"\b(ingestion|ingest|indexing|chunking|parser|embedding)\b": {
+        "semantic_labels": ["ingestion", "repository-indexing", "code-chunking", "ast-parser", "embedding-generation"],
+    },
+    r"\b(qdrant|upsert|vector\s+(?:db|database|store)|chunk\s+storage)\b": {
+        "semantic_labels": ["qdrant", "vector-storage", "vector-upsert", "vector-search"],
+    },
+    r"\b(config|configuration|settings|environment|env)\b": {
+        "semantic_labels": ["configuration", "environment-variables", "runtime-settings"],
+    },
+    r"\b(provider|providers|api\s+key|credentials)\b": {
+        "semantic_labels": ["provider-management", "credential-storage", "model-routing"],
+    },
+    r"\b(frontend|ui|component|react|rendering)\b": {
+        "semantic_labels": ["frontend", "ui-rendering", "react-component"],
+    },
+    r"\b(test|tests|testing|pytest|unittest)\b": {
+        "semantic_labels": ["testing", "unit-testing", "integration-testing"],
+    },
+    r"\b(devops|docker|dockerfile|deploy|deployment|ci|cd)\b": {
+        "semantic_labels": ["containerization", "deployment", "continuous-integration"],
+    },
+    r"\b(source\s+filtering|context\s+pruning|display\s+sources?)\b": {
+        "semantic_labels": ["source-filtering", "context-pruning", "evidence-selection"],
+    },
 }
 
 
@@ -89,18 +61,42 @@ def _any_term_in_query(terms: list[str], query: str) -> bool:
     return any(_term_in_query(term, query) for term in terms)
 
 
-def extract_semantic_boosts(query: str) -> list[str]:
-    """Return de-duplicated semantic labels suggested by query vocabulary."""
-    boosts: list[str] = []
-    seen: set[str] = set()
-    for pattern, labels in SEMANTIC_KEYWORDS_MAP.items():
+def extract_semantic_hints(query: str) -> dict[str, list[str]]:
+    """Return de-duplicated labels, API routes, and file hints for a query."""
+    hints = {"semantic_labels": [], "api_routes": [], "files": []}
+    seen = {key: set() for key in hints}
+    for pattern, mapping in SEMANTIC_KEYWORDS_MAP.items():
         if not re.search(pattern, query, re.IGNORECASE):
             continue
-        for label in labels:
-            if label not in seen:
-                seen.add(label)
-                boosts.append(label)
-    return boosts
+        for key, values in mapping.items():
+            if key not in hints:
+                continue
+            for value in values:
+                if value not in seen[key]:
+                    seen[key].add(value)
+                    hints[key].append(value)
+    return hints
+
+
+def extract_semantic_boosts(query: str) -> list[str]:
+    """Return semantic labels from the structured semantic hint map."""
+    return extract_semantic_hints(query)["semantic_labels"]
+
+
+def resolve_intent_with_confidence_floor(
+    intent_scores: dict[str, float], entities: dict[str, object], floor: float = 0.50
+) -> tuple[str, float]:
+    """Return OUT_OF_SCOPE for low-confidence queries without explicit targets."""
+    primary_intent = max(intent_scores, key=intent_scores.get)
+    confidence = float(intent_scores.get(primary_intent, 0.0))
+    file_lookup = entities.get("file_lookup")
+    explicit_files = (
+        file_lookup.get("raw_tokens", []) if isinstance(file_lookup, dict) else []
+    )
+    has_explicit_target = bool(entities.get("symbols") or explicit_files)
+    if confidence < floor and not has_explicit_target:
+        return "OUT_OF_SCOPE", confidence
+    return primary_intent, confidence
 
 
 def is_code_request_query(query: str) -> bool:
@@ -113,6 +109,7 @@ def is_code_request_query(query: str) -> bool:
         "show me the code",
         "give me the code",
         "i want the code",
+        "i want code",
         "show snippet",
         "full code",
         "provide code",
@@ -269,7 +266,6 @@ def is_retrieval_explanation_query(query: str) -> bool:
 
 
 def is_source_location_query(query: str) -> bool:
-    import re
     q = query.lower().strip()
     source_location_markers = [
         r"\bwhere\s+is\b",

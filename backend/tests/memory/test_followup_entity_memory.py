@@ -229,8 +229,9 @@ class TestRewriteFollowUpQuery(unittest.TestCase):
             previous_resolved_query="",
         )
         self.assertEqual(result["raw_query"], "where is it used")
-        self.assertEqual(result["followup_hint"], "create_session")
-        self.assertEqual(result["rewrite_mode"], "soft_hint")
+        self.assertEqual(result["followup_anchor"], "create_session")
+        self.assertEqual(result["rewrite_mode"], "anaphora_resolution")
+        self.assertEqual(result["resolved_query"], "where is create_session used")
 
     def test_injects_recent_file_when_no_symbol(self) -> None:
         entity_set = {
@@ -242,7 +243,8 @@ class TestRewriteFollowUpQuery(unittest.TestCase):
             entity_set,
             previous_resolved_query="",
         )
-        self.assertEqual(result["followup_hint"], "retrieval/main.py")
+        self.assertEqual(result["followup_anchor"], "retrieval/main.py")
+        self.assertEqual(result["resolved_query"], "show me retrieval/main.py")
 
     def test_combines_with_previous_anchor(self) -> None:
         entity_set = {
@@ -255,8 +257,9 @@ class TestRewriteFollowUpQuery(unittest.TestCase):
             previous_resolved_query="What does auth_github do?",
         )
         self.assertEqual(result["raw_query"], "also provide code")
-        self.assertEqual(result["followup_hint"], "auth_github")
+        self.assertEqual(result["followup_anchor"], "auth_github")
         self.assertEqual(result["rewrite_anchor"], "What does auth_github do?")
+        self.assertEqual(result["resolved_query"], "also provide code auth_github")
 
     def test_non_vague_query_uses_anchor(self) -> None:
         entity_set = {
@@ -270,8 +273,9 @@ class TestRewriteFollowUpQuery(unittest.TestCase):
             previous_resolved_query="How does search work?",
         )
         self.assertEqual(result["raw_query"], "explain the caching logic")
-        self.assertIsNone(result["followup_hint"])
+        self.assertIsNone(result["followup_anchor"])
         self.assertEqual(result["rewrite_mode"], "none")
+        self.assertEqual(result["resolved_query"], "explain the caching logic")
 
     def test_no_recent_entities_falls_back_to_anchor(self) -> None:
         entity_set = {
@@ -282,8 +286,9 @@ class TestRewriteFollowUpQuery(unittest.TestCase):
             entity_set,
             previous_resolved_query="What does run_query do?",
         )
-        self.assertIsNone(result["followup_hint"])
+        self.assertIsNone(result["followup_anchor"])
         self.assertEqual(result["rewrite_anchor"], "What does run_query do?")
+        self.assertEqual(result["resolved_query"], "what about that")
 
 
 # ---------------------------------------------------------------------------
@@ -499,7 +504,7 @@ class TestMultiTurnFollowUpEntityInjection(unittest.TestCase):
             recent_entity_set,
             previous_resolved_query="What does run_query do?",
         )
-        self.assertIn("run_query", rewritten["followup_hint"])
+        self.assertIn("run_query", rewritten["followup_anchor"])
 
     def test_also_provide_code_retains_symbol_in_search(self) -> None:
         """'also provide code' should expand to include the last cited symbol."""
@@ -525,7 +530,10 @@ class TestMultiTurnFollowUpEntityInjection(unittest.TestCase):
             from retrieval.main import run_query
             run_query("also provide code", memory)
 
-        self.assertIsNone(captured.get("query_info", {}).get("followup_hint"))
+        self.assertIn(
+            "create_session",
+            captured.get("query_info", {}).get("followup_anchor", ""),
+        )
 
     def test_topic_shift_does_not_inject_old_entities(self) -> None:
         """A clearly new topic should not drag in entities from the prior turn."""
@@ -581,7 +589,7 @@ class TestMultiTurnFollowUpEntityInjection(unittest.TestCase):
             entity_set,
             previous_resolved_query="What does search do?\nalso provide code",
         )
-        self.assertIn("search", rewritten["followup_hint"])
+        self.assertIn("search", rewritten["followup_anchor"])
 
     def test_most_salient_entity_prefers_latest_symbol(self) -> None:
         entity_set = {

@@ -53,7 +53,7 @@ def test_previous_candidate_injection_is_capped_and_tagged_for_followup() -> Non
         "is_followup": True,
         "intent_scores": {"FOLLOWUP": 0.91},
         "entities": {},
-        "followup_hint": "backend/retrieval/api_service.py::sym0",
+        "followup_anchor": "backend/retrieval/api_service.py::sym0",
     }
 
     with patch("retrieval.search.searcher._get_client") as get_client, \

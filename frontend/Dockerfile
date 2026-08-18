@@ -28,10 +28,13 @@ LABEL stage="production"
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
 
+# 1. Explicitly define PORT so envsubst can use it, defaulting to 80 for local dev
+ENV PORT=80
 ENV ALLOWED_HOST=_
-ENV NGINX_ENVSUBST_FILTER=ALLOWED_HOST
 
-EXPOSE 80
+EXPOSE ${PORT}
 
+# 2. Updated healthcheck to use the dynamic ${PORT} variable
+# Note: Using shell form (not exec array) ensures ${PORT} is interpolated
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget --quiet --tries=1 --spider http://127.0.0.1:80/healthz || exit 1
+    CMD wget --quiet --tries=1 --spider http://127.0.0.1:${PORT}/healthz || exit 1

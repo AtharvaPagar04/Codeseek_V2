@@ -6,6 +6,11 @@
 
 Explanation requests use LLM generation rather than the deterministic explanation builder.
 
+`OUT_OF_SCOPE` queries use `generate_conversational_answer()` instead. This
+route deliberately receives no repository context and does not make a Qdrant
+or other retrieval call, so a casual message cannot be presented as a
+repository-grounded answer.
+
 ## LLM Providers
 
 The generation layer supports `groq`, `openai`, `openrouter`, `gemini`, `aicredits`, and `local`. Provider credentials and model selection are resolved before the request. Retry and circuit-breaker controls protect external calls.

@@ -1,0 +1,58 @@
+services:
+  # ==========================================
+  # 1. Backend Service (FastAPI Docker)
+  # ==========================================
+  - type: web
+    name: codeseek-backend
+    runtime: docker
+    dockerfilePath: backend/Dockerfile
+    dockerContext: backend
+    plan: starter # Upgrade to 'standard' if your RAG ingestion requires more RAM
+    region: oregon # Choose the region closest to your external DBs to minimize latency
+    healthCheckPath: /api/v1/health
+    autoDeploy: true
+    envVars:
+      # External Database Connections (You will provide these in the Render Dashboard)
+      - key: CODESEEK_DB_BACKEND
+        value: postgres
+      - key: CODESEEK_DATABASE_URL
+        sync: false # Render will prompt you to paste your external Postgres URL
+      - key: QDRANT_URL
+        sync: false # Render will prompt you to paste your external Qdrant URL
+      
+      # Application Settings
+      - key: CODESEEK_REPO_WORKSPACE
+        value: /data/repo_workspace
+      - key: CODESEEK_TENANT_ID
+        value: production
+      - key: CODESEEK_CORS_ORIGINS
+        value: https://codeseek-frontend.onrender.com # We will update this after frontend deploys
+      - key: CODESEEK_APP_ENCRYPTION_KEY
+        generateValue: true # Render auto-generates a secure 32-char key
+      - key: CODESEEK_API_KEY
+        generateValue: true # Render auto-generates a secure API key for frontend auth
+    
+    # Persistent Disk for repo cloning/workspace
+    disk:
+      name: codeseek-repo-workspace
+      mountPath: /data/repo_workspace
+      sizeGB: 10 # Adjust based on expected repo sizes
+
+  # ==========================================
+  # 2. Frontend Service (Vite/React Docker)
+  # ==========================================
+  - type: web
+    name: codeseek-frontend
+    runtime: docker
+    dockerfilePath: frontend/Dockerfile
+    dockerContext: frontend
+    plan: starter
+    region: oregon # Must match backend region for optimal internal routing
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      # This will be automatically populated by Render once the backend is deployed
+      - key: VITE_API_BASE_URL
+        value: https://codeseek-backend.onrender.com
+      - key: VITE_API_KEY
+        sync: false # You will paste the generated CODESEEK_API_KEY from the backend here

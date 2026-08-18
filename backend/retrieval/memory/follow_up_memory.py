@@ -403,19 +403,21 @@ def rewrite_follow_up_query(
     recent_entity_set: dict[str, list[str]],
     previous_resolved_query: str,
 ) -> dict[str, str | None]:
-    """Produce a soft follow-up hint without mutating the raw query.
+    """Resolve a vague follow-up and return the pipeline's rewrite contract.
 
     Strategy:
-    - If the raw query has explicit pronouns / vague references and the
-      recent entity set has symbols/files, expose a soft hint that the
-      search/reranker can treat as a weak signal.
-    - The raw query remains unchanged.
+    - Explicit pronouns are replaced with the most salient recent entity.
+    - Short follow-ups such as ``also provide code`` receive the entity as
+      an anchor suffix.
+    - ``raw_query`` remains the user's original text; ``resolved_query`` is
+      the text passed into intent/entity processing.
     """
     lower = raw_query.strip().lower()
     if not lower:
         return {
             "raw_query": raw_query.strip(),
-            "followup_hint": None,
+            "resolved_query": "",
+            "followup_anchor": None,
             "rewrite_mode": "none",
             "rewrite_anchor": None,
         }
@@ -428,16 +430,28 @@ def rewrite_follow_up_query(
     if vague_query and has_recent:
         anchor_term = _most_salient_entity_reference(recent_entity_set)
         if anchor_term and anchor_term.lower() not in lower:
+            if re.search(r"\b(it|that|this|those|there|they|them)\b", lower):
+                resolved_query = re.sub(
+                    r"\b(it|that|this|those|there|they|them)\b",
+                    anchor_term,
+                    raw_query.strip(),
+                    count=1,
+                    flags=re.IGNORECASE,
+                )
+            else:
+                resolved_query = f"{raw_query.strip()} {anchor_term}".strip()
             return {
                 "raw_query": raw_query.strip(),
-                "followup_hint": anchor_term,
-                "rewrite_mode": "soft_hint",
+                "resolved_query": resolved_query,
+                "followup_anchor": anchor_term,
+                "rewrite_mode": "anaphora_resolution",
                 "rewrite_anchor": anchor,
             }
 
     return {
         "raw_query": raw_query.strip(),
-        "followup_hint": None,
+        "resolved_query": raw_query.strip(),
+        "followup_anchor": None,
         "rewrite_mode": "none",
         "rewrite_anchor": anchor,
     }

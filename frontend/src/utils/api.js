@@ -218,23 +218,78 @@ export const querySession = async ({
   });
 };
 
+export class StreamProtocolError extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'StreamProtocolError';
+    this.code = code;
+  }
+}
+
+export const decodeNdjsonStream = async (reader, onEvent) => {
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  const parseRecord = (line, final = false) => {
+    const record = line.endsWith('\r') ? line.slice(0, -1) : line;
+    if (!record.trim()) return;
+    let event;
+    try {
+      event = JSON.parse(record);
+    } catch {
+      if (final) {
+        throw new StreamProtocolError('malformed_final_record', 'Malformed final stream protocol record.');
+      }
+      console.error('Failed to parse stream protocol record.');
+      return;
+    }
+    onEvent(event);
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const records = buffer.split('\n');
+    buffer = records.pop() || '';
+    records.forEach((record) => parseRecord(record));
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) parseRecord(buffer, true);
+};
+
 export const querySessionStream = async ({
   question,
   session_id,
   thread_id = '',
   graph_retrieval_mode = 'standard',
+  request_id = '',
   onStatus,
   onDelta,
+  onFinalAnswer,
   onSources,
   onDone,
   onError,
   signal,
 }) => {
+  const state = {
+    request_id: request_id || null,
+    provisional_text: '',
+    authoritative_text: null,
+    final_seen: false,
+    message_id: null,
+    generation_status: null,
+    terminal_status: null,
+    protocol_version: 1,
+    sources_seen: false,
+    error: null,
+  };
   try {
     const res = await fetch(`${API_BASE}/api/v1/query/stream`, {
       method: 'POST',
       credentials: 'include',
-      credentials: 'include', headers: authHeaders(),
+      headers: authHeaders(request_id ? { 'X-Request-Id': request_id } : {}),
       body: JSON.stringify({
         question,
         session_id,
@@ -251,51 +306,105 @@ export const querySessionStream = async ({
     }
 
     const reader = res.body.getReader();
-    const decoder = new TextDecoder('utf-8');
-    let buffer = '';
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          const event = JSON.parse(trimmed);
-          if (event.type === 'status' && onStatus) {
-            onStatus(event.message);
-          } else if (event.type === 'delta' && onDelta) {
-            onDelta(event.text);
-          } else if (event.type === 'sources' && onSources) {
-            onSources({
-              sources: event.sources,
-              context_tokens: event.context_tokens,
-              diagnostics: event.diagnostics || null,
-              evidence_confidence: event.evidence_confidence,
-            });
-          } else if (event.type === 'error' && onError) {
-            onError(event.message);
-          } else if (event.type === 'done' && onDone) {
-            onDone(event);
-          }
-        } catch (e) {
-          console.error('Failed to parse NDJSON line:', trimmed, e);
+    await decodeNdjsonStream(reader, (event) => {
+      const version = Number(event.protocol_version || 1);
+      if (version >= 2) {
+        state.protocol_version = version;
+        if (!event.request_id) {
+          throw new StreamProtocolError('missing_request_id', 'Version 2 event is missing request correlation.');
         }
+        if (request_id && event.request_id !== request_id) return;
+        if (state.request_id && event.request_id !== state.request_id) return;
+        state.request_id = event.request_id;
       }
+      if (state.terminal_status) return;
+
+      if (event.type === 'status') {
+        if (onStatus) {
+          onStatus(event.message);
+        }
+      } else if (event.type === 'delta') {
+        state.provisional_text += event.text || '';
+        if (onDelta) {
+          onDelta(event.text);
+        }
+      } else if (event.type === 'final_answer') {
+        if (version < 2) return;
+        if (!event.authoritative || !event.message_id || !String(event.text || '').trim()) {
+          throw new StreamProtocolError('invalid_final_answer', 'Invalid authoritative final_answer event.');
+        }
+        if (!['complete', 'partial'].includes(event.generation_status)) {
+          throw new StreamProtocolError('invalid_generation_status', 'Invalid final answer generation status.');
+        }
+        if (state.final_seen) {
+          if (
+            state.message_id === event.message_id
+            && state.authoritative_text === event.text
+            && state.generation_status === event.generation_status
+          ) return;
+          throw new StreamProtocolError('conflicting_final_answer', 'Conflicting final_answer event.');
+        }
+        state.final_seen = true;
+        state.authoritative_text = event.text;
+        state.message_id = event.message_id;
+        state.generation_status = event.generation_status;
+        if (onFinalAnswer) onFinalAnswer(event);
+      } else if (event.type === 'sources') {
+        if (state.sources_seen) return;
+        if (version >= 2 && !state.final_seen) {
+          throw new StreamProtocolError('sources_before_final', 'Sources arrived before final_answer.');
+        }
+        if (version >= 2 && state.message_id && event.message_id !== state.message_id) {
+          throw new StreamProtocolError('source_identity_mismatch', 'Sources do not match the final answer.');
+        }
+        state.sources_seen = true;
+        if (onSources) {
+          onSources({
+            sources: event.sources,
+            context_tokens: event.context_tokens,
+            diagnostics: event.diagnostics || null,
+            evidence_confidence: event.evidence_confidence,
+            request_id: event.request_id || null,
+            message_id: event.message_id || null,
+          });
+        }
+      } else if (event.type === 'error') {
+        state.error = new StreamProtocolError(event.code || 'stream_error', event.message || 'Query stream failed.');
+        if (onError) onError(state.error.message);
+      } else if (event.type === 'done') {
+        const status = event.status || (version >= 2 ? null : 'complete');
+        if (version >= 2 && !['complete', 'partial', 'error', 'cancelled'].includes(status)) {
+          throw new StreamProtocolError('invalid_terminal_status', 'Invalid stream terminal status.');
+        }
+        if (version >= 2 && ['complete', 'partial'].includes(status)) {
+          if (!state.final_seen) {
+            throw new StreamProtocolError('missing_final_answer', 'Version 2 success requires final_answer.');
+          }
+          if (state.generation_status !== status || event.message_id !== state.message_id) {
+            throw new StreamProtocolError('terminal_identity_mismatch', 'Terminal event does not match final_answer.');
+          }
+        }
+        if (version >= 2 && status === 'error' && !state.error) {
+          state.error = new StreamProtocolError('stream_error', 'Query stream failed.');
+          if (onError) onError(state.error.message);
+        }
+        state.terminal_status = status;
+        if (onDone) onDone(event);
+      }
+    });
+
+    if (state.protocol_version >= 2 && !state.terminal_status) {
+      throw new StreamProtocolError('missing_terminal_event', 'Version 2 stream ended without a terminal event.');
     }
+    return state;
   } catch (err) {
     if (err.name === 'AbortError') {
-      return;
+      return { ...state, terminal_status: 'cancelled' };
     }
-    if (onError) {
+    if (onError && (!state.error || state.error.message !== err.message)) {
       onError(err.message || 'Stream connection closed unexpectedly');
     }
+    return { ...state, terminal_status: state.terminal_status || 'error', error: err };
   }
 };
 

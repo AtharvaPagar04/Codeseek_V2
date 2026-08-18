@@ -15,7 +15,6 @@ from rag_ingestion.utils.gpu_cleanup import clear_python_cuda_cache
 from retrieval.support.embedding_provider import (
     current_embedding_metadata,
     get_embedding_provider,
-    get_embedding_provider_config,
     unload_local_embedding_model,
 )
 
@@ -110,10 +109,11 @@ def embed_chunks(
     embedded_count = 0
     next_cooldown_at = CODESEEK_EMBEDDING_COOLDOWN_EVERY
 
-    try:
-        for start in range(0, len(chunks), batch_size):
-            batch = chunks[start : start + batch_size]
-            inputs = [_embedding_input(chunk) for chunk in batch]
+    last_exc: Exception | None = None
+    for start in range(0, len(chunks), batch_size):
+        batch = chunks[start : start + batch_size]
+        inputs = [_embedding_input(chunk) for chunk in batch]
+        try:
             embeddings = provider.embed_texts(
                 inputs,
                 batch_size=batch_size,
@@ -122,45 +122,67 @@ def embed_chunks(
             for chunk, embedding in zip(batch, embeddings, strict=True):
                 chunk.embedding = list(embedding)
                 counters.embeddings_generated += 1
-            
-            
-            embedded_count += len(batch)
-            if event_callback:
-                event_callback(
-                    stage="embedding",
-                    message=f"Embedded {embedded_count} of {total_chunks} chunks...",
-                    progress=embedded_count,
-                    total=total_chunks,
-                )
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "[embedding] Batch of %d chunks failed (%s); attempting per-chunk fallback...",
+                len(batch),
+                exc,
+            )
+            for chunk in batch:
+                inp = _embedding_input(chunk)
+                try:
+                    single_emb = provider.embed_texts([inp], batch_size=1, show_progress_bar=False)
+                    if single_emb and len(single_emb) > 0:
+                        chunk.embedding = list(single_emb[0])
+                        counters.embeddings_generated += 1
+                except Exception as chunk_exc:
+                    last_exc = chunk_exc
+                    logger.error(
+                        "Failed to generate embedding for chunk %s (%s): %s",
+                        chunk.chunk_id,
+                        chunk.relative_path,
+                        chunk_exc,
+                    )
+                    chunk.embedding = []
 
-            # Free temporary inputs/embeddings and collect Python memory
-            del inputs
-            del embeddings
+        embedded_count += len(batch)
+        if event_callback:
+            event_callback(
+                stage="embedding",
+                message=f"Embedded {embedded_count} of {total_chunks} chunks...",
+                progress=embedded_count,
+                total=total_chunks,
+            )
+
+        # Free temporary inputs/embeddings and collect Python memory
+        del inputs
+        cleanup_after_batch()
+
+        remaining = total_chunks - embedded_count
+        if (
+            CODESEEK_EMBEDDING_COOLDOWN_EVERY > 0
+            and CODESEEK_EMBEDDING_COOLDOWN_SECONDS > 0
+            and remaining > 0
+            and embedded_count >= next_cooldown_at
+        ):
             cleanup_after_batch()
+            print(
+                f"[embedding.cooldown] embedded={embedded_count} remaining={remaining} sleeping={CODESEEK_EMBEDDING_COOLDOWN_SECONDS}s"
+            )
+            _sleep(CODESEEK_EMBEDDING_COOLDOWN_SECONDS)
+            while next_cooldown_at <= embedded_count:
+                next_cooldown_at += CODESEEK_EMBEDDING_COOLDOWN_EVERY
 
-            remaining = total_chunks - embedded_count
-            if (
-                CODESEEK_EMBEDDING_COOLDOWN_EVERY > 0
-                and CODESEEK_EMBEDDING_COOLDOWN_SECONDS > 0
-                and remaining > 0
-                and embedded_count >= next_cooldown_at
-            ):
-                cleanup_after_batch()
-                print(
-                    f"[embedding.cooldown] embedded={embedded_count} remaining={remaining} sleeping={CODESEEK_EMBEDDING_COOLDOWN_SECONDS}s"
-                )
-                _sleep(CODESEEK_EMBEDDING_COOLDOWN_SECONDS)
-                while next_cooldown_at <= embedded_count:
-                    next_cooldown_at += CODESEEK_EMBEDDING_COOLDOWN_EVERY
-    except Exception as exc:
+    if chunks and counters.embeddings_generated == 0 and last_exc is not None:
         logger.error(
             "Embedding generation failed: %s. "
             "This may be caused by provider configuration issues, upstream request failures, "
             "CUDA OOM, or system RAM limits. Try reducing CODESEEK_EMBEDDING_BATCH_SIZE or "
             "switching CODESEEK_EMBEDDING_PROVIDER.",
-            exc,
+            last_exc,
         )
-        raise exc
+        raise last_exc
 
     resolved_dimensions = 0
     for chunk in chunks:

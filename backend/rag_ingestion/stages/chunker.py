@@ -6,6 +6,7 @@ from pathlib import Path
 from rag_ingestion.models.chunk import Chunk
 from rag_ingestion.models.file import FileRecord
 from rag_ingestion.models.parsed import ParsedFile
+from rag_ingestion.stages.summary import build_env_usage_content
 from retrieval.search.source_truth import analyze_source_truth
 
 
@@ -77,6 +78,9 @@ def generate_chunks(parsed: ParsedFile, file: FileRecord) -> list[Chunk]:
     lines = Path(file.path).read_text(encoding="utf-8", errors="ignore").splitlines(
         keepends=True
     )
+    file_content = "".join(lines)
+    if _is_env_config_file(file.relative_path):
+        file_content = build_env_usage_content(file.path, file_content)
 
     if parsed.parse_status == "failed":
         return [
@@ -88,14 +92,13 @@ def generate_chunks(parsed: ParsedFile, file: FileRecord) -> list[Chunk]:
                 start_line=1 if lines else 0,
                 end_line=len(lines),
                 imports=parsed.imports,
-                content="".join(lines),
+                content=file_content,
             )
         ]
 
     chunks: list[Chunk] = []
     file_symbols = [symbol.symbol_name for symbol in parsed.symbols]
     imported_symbols = _extract_imported_symbols(parsed.imports)
-    file_content = "".join(lines)
     used_symbols = _extract_used_symbols(file_content)
     source_truth = analyze_source_truth(
         relative_path=file.relative_path,
@@ -127,7 +130,11 @@ def generate_chunks(parsed: ParsedFile, file: FileRecord) -> list[Chunk]:
     )
 
     for symbol in parsed.symbols:
-        content = "".join(lines[symbol.start_line - 1 : symbol.end_line])
+        content = (
+            file_content
+            if _is_env_config_file(file.relative_path)
+            else "".join(lines[symbol.start_line - 1 : symbol.end_line])
+        )
         symbol_used = _extract_used_symbols(content)
         chunks.append(
             Chunk(
@@ -157,3 +164,8 @@ def generate_chunks(parsed: ParsedFile, file: FileRecord) -> list[Chunk]:
         )
 
     return chunks
+
+
+def _is_env_config_file(relative_path: str) -> bool:
+    filename = Path(relative_path).name.lower()
+    return filename in {".env", ".env.example"}

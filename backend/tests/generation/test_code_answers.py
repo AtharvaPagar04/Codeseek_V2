@@ -1713,7 +1713,7 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertEqual(token_count, 12)
         generate_answer.assert_not_called()
 
-    def test_run_query_does_not_cite_reasoning_only_sources(self) -> None:
+    def test_run_query_authorizes_reasoning_sources_without_displaying_uncited_sources(self) -> None:
         display_source = {
             "relative_path": "retrieval/api_service.py",
             "symbol_name": "_query_impl",
@@ -1786,7 +1786,10 @@ class CodeAnswerTests(unittest.TestCase):
         self.assertEqual(answer, "answer")
         self.assertEqual(sources, [display_source])
         self.assertEqual(token_count, 24)
-        self.assertEqual(generate_answer.call_args.kwargs["allowed_sources"], [display_source])
+        self.assertEqual(
+            generate_answer.call_args.kwargs["allowed_sources"],
+            [display_source, reasoning_only_source],
+        )
 
     def test_run_query_bypasses_llm_for_architecture_requests(self) -> None:
         source = {

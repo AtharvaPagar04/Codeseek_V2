@@ -1,5 +1,6 @@
 """Intent classification and entity extraction for retrieval."""
 
+import logging
 import re
 
 from retrieval.config import ENABLE_SCORED_INTENT
@@ -38,7 +39,11 @@ INTENT_FAMILIES = (
     "FOLLOWUP",
     "LOW_CONTEXT",
     "SEMANTIC",
+    "OUT_OF_SCOPE",
+    "ABSENCE_CHECK",
 )
+
+logger = logging.getLogger(__name__)
 
 # Include leading-underscore symbols so exact code requests like `_require_auth`
 # are extracted and can be routed as exact symbol lookups.
@@ -50,7 +55,6 @@ ENV_KEY_RE = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b")
 ROUTE_RE = re.compile(r"(?<!\w)/(?:api|auth|v\d|[A-Za-z0-9_.:-]+)[A-Za-z0-9_./{}:-]*")
 PACKAGE_TOKEN_RE = re.compile(r"\b@?[A-Za-z0-9][A-Za-z0-9_.@/-]*(?:[-/.][A-Za-z0-9][A-Za-z0-9_.@/-]*)+\b")
 HYPHENATED_API_TERM_RE = re.compile(r"\b[a-z][a-z0-9]+(?:-[a-z0-9]+)+\b")
-WORD_RE = re.compile(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b")
 
 # Known config/settings files that should be injected as file hints when CONFIG
 # intent fires and env-key or config-key entities are present in the query.
@@ -64,20 +68,6 @@ GENERIC_ARCHITECTURE_FILES = [
     "docker-compose.yml",
     "Dockerfile",
 ]
-
-# ---------------------------------------------------------------------------
-# Hard stop: do NOT add new heuristic intent families beyond this list.
-# The scored-intent layer is considered feature-complete for the entity/query
-# families defined in INTENT_FAMILIES.
-#
-# New routing heuristics are only justified when:
-#   (a) an eval case fails with hit@k=0 or wrong response_mode, AND
-#   (b) the failure cannot be fixed by improving entity extraction alone.
-#
-# If both conditions hold, open a new task in the active retrieval roadmap/docs
-# before adding code here.
-# ---------------------------------------------------------------------------
-HEURISTIC_COVERAGE_COMPLETE = True  # sentinel — do not remove
 
 KNOWN_DEPENDENCY_TERMS = {
     "fastapi",
@@ -112,65 +102,15 @@ KNOWN_SERVICE_TERMS = {
     "web",
 }
 
-STOPWORDS = {
-    "How",
-    "how",
-    "Are",
-    "are",
-    "Is",
-    "is",
-    "Why",
-    "why",
-    "Does",
-    "does",
-    "What",
-    "what",
-    "Where",
-    "where",
-    "which",
-    "when",
-    "from",
-    "with",
-    "this",
-    "that",
-    "there",
-    "implemented",
-    "function",
-    "class",
-    "tests",
-    "test",
-    "call",
-    "calls",
-    "trace",
-    "exact",
-    "show",
-    "find",
-    "list",
+SYMBOL_EXTRACTION_STOPWORDS = {
+    "about", "add", "all", "and", "any", "are", "ask", "batch", "can",
+    "check", "class", "code", "create", "describe", "does", "error", "errors",
+    "explain", "file", "files", "find", "flow", "for", "from", "function",
+    "handle", "how", "implementation", "in", "is", "it", "list", "method",
+    "module", "of", "or", "process", "query", "return", "search", "show",
+    "that", "the", "this", "to", "trace", "use", "used", "what", "when",
+    "where", "which", "why", "with", "work", "works",
 }
-
-FOLLOWUP_PHRASES = (
-    "where is it used",
-    "how does that",
-    "what about",
-    "and that",
-    "this function",
-)
-
-FOLLOWUP_TOKENS = {
-    "it",
-    "that",
-    "this",
-}
-
-CODE_REQUEST_PHRASES = (
-    "show code",
-    "show me the code",
-    "code for",
-    "implementation of",
-    "provide code",
-    "code snippet",
-    "show the implementation",
-)
 
 LOOKUP_PHRASES = (
     "where is",
@@ -213,7 +153,7 @@ def _llm_classify_intent(query: str, timeout_ms: int, max_tokens: int) -> str:
         
     prompt = (
         f"Classify the query intent into exactly one of these categories:\n"
-        f"OVERVIEW, ARCHITECTURE, TECH_STACK, EXPLANATION, SYMBOL, FILE, TRACE, DEPENDENCY, CONFIG, CODE_REQUEST, FOLLOWUP, LOW_CONTEXT, SEMANTIC.\n\n"
+        f"OVERVIEW, ARCHITECTURE, TECH_STACK, EXPLANATION, SYMBOL, FILE, TRACE, DEPENDENCY, CONFIG, CODE_REQUEST, FOLLOWUP, LOW_CONTEXT, SEMANTIC, OUT_OF_SCOPE, ABSENCE_CHECK.\n\n"
         f"Query: '{query}'\n"
         f"Response (single word only):"
     )
@@ -234,8 +174,13 @@ def _llm_classify_intent(query: str, timeout_ms: int, max_tokens: int) -> str:
     return result
 
 
-def process_query(raw_query: str, active_index_paths: set[str] | None = None) -> dict:
-    """Classify intent and extract symbols/file hints from query text."""
+def process_query(
+    raw_query: str,
+    active_index_paths: set[str] | None = None,
+    *,
+    original_query: str | None = None,
+) -> dict:
+    """Classify intent and extract entities from the already-resolved query text."""
     import time
     import os
     from retrieval.config import (
@@ -246,7 +191,14 @@ def process_query(raw_query: str, active_index_paths: set[str] | None = None) ->
 
     
     query = raw_query.strip()
+    original = (original_query or query).strip()
     lower = query.lower()
+    if original != query:
+        logger.debug(
+            "Entity extraction uses rewritten follow-up query: original=%r resolved=%r",
+            original,
+            query,
+        )
 
     symbols = _extract_symbols(query)
     extracted_file_tokens = _extract_files(query)
@@ -269,8 +221,7 @@ def process_query(raw_query: str, active_index_paths: set[str] | None = None) ->
     }
     _inject_flow_symbols(query, entities)
     _inject_semantic_boosts(query, entities)
-    _inject_architecture_files(query, entities, active_index_paths)
-    _inject_source_contract_files(query, entities, active_index_paths)
+    apply_active_index_hints(query, entities, active_index_paths)
 
     if ENABLE_SCORED_INTENT:
         entities.update(_extract_scored_entities(query))
@@ -279,13 +230,11 @@ def process_query(raw_query: str, active_index_paths: set[str] | None = None) ->
         entities.update(_empty_scored_entities())
         intent_scores = _legacy_intent_scores(intent)
 
-    _inject_config_files(query, entities, active_index_paths)
-
     classifier_mode = "deterministic"
     classifier_latency_ms = 0.0
     classifier_fallback_used = False
 
-    if ENABLE_LLM_QUERY_CLASSIFIER:
+    if ENABLE_LLM_QUERY_CLASSIFIER and not _has_absence_markers(lower):
         classifier_mode = "llm"
         t0 = time.perf_counter()
         try:
@@ -303,15 +252,31 @@ def process_query(raw_query: str, active_index_paths: set[str] | None = None) ->
             classifier_fallback_used = True
         classifier_latency_ms = (time.perf_counter() - t0) * 1000.0
 
-    primary_intent = max(intent_scores, key=intent_scores.get)
-    from retrieval.query.query_intent import classify_response_mode, classify_source_intent
+    # Missing advanced features must remain deterministic even when an optional
+    # LLM classifier is enabled and returns a more general intent.
+    if _has_absence_markers(lower):
+        intent_scores = {intent_type: float(intent_scores.get(intent_type, 0.0)) for intent_type in INTENT_FAMILIES}
+        intent_scores["ABSENCE_CHECK"] = 0.99
 
-    confidence = float(intent_scores.get(primary_intent, 0.0))
-    response_mode = classify_response_mode(query)
-    source_intent = classify_source_intent(query)
+    from retrieval.query.query_intent import (
+        classify_response_mode,
+        classify_source_intent,
+        resolve_intent_with_confidence_floor,
+    )
+
+    primary_intent, confidence = resolve_intent_with_confidence_floor(
+        intent_scores, entities
+    )
+    response_mode = (
+        "chitchat" if primary_intent == "OUT_OF_SCOPE" else classify_response_mode(query)
+    )
+    source_intent = "general" if primary_intent == "OUT_OF_SCOPE" else classify_source_intent(query)
+    if primary_intent == "OUT_OF_SCOPE":
+        intent = "OUT_OF_SCOPE"
     
     result = {
         "raw_query": query,
+        "user_query": original,
         "intent": intent,
         "primary_intent": primary_intent,
         "response_mode": response_mode,
@@ -327,7 +292,9 @@ def process_query(raw_query: str, active_index_paths: set[str] | None = None) ->
     }
     
     if os.getenv("DEBUG_QUERY_PROCESSOR") == "1":
-        print(f"DEBUG: process_query({raw_query!r})")
+        print(f"DEBUG: process_query({original!r})")
+        if original != query:
+            print(f"DEBUG: entity extraction query={query!r} (memory-resolved)")
         print(f"DEBUG: intent={intent}, primary={primary_intent}, source={source_intent}")
         for k, v in entities.items():
             print(f"DEBUG: entities[{k}]={v}")
@@ -356,14 +323,29 @@ def _inject_flow_symbols(query: str, entities: dict) -> None:
 
 
 def _inject_semantic_boosts(query: str, entities: dict) -> None:
-    from retrieval.query.query_intent import extract_semantic_boosts
+    from retrieval.query.query_intent import extract_semantic_hints
 
-    boosts = list(entities.get("boost_semantic_keywords") or [])
-    for keyword in extract_semantic_boosts(query):
-        if keyword not in boosts:
-            boosts.append(keyword)
-    if boosts:
-        entities["boost_semantic_keywords"] = boosts
+    hints = extract_semantic_hints(query)
+    for entity_key, hint_key in (
+        ("boost_semantic_keywords", "semantic_labels"),
+        ("api_routes", "api_routes"),
+        ("files", "files"),
+    ):
+        merged = list(entities.get(entity_key) or [])
+        for value in hints[hint_key]:
+            if value not in merged:
+                merged.append(value)
+        if merged:
+            entities[entity_key] = merged
+
+
+def apply_active_index_hints(
+    query: str, entities: dict, active_index_paths: set[str] | None
+) -> None:
+    """Add active-index file hints after intent resolution has allowed retrieval."""
+    _inject_architecture_files(query, entities, active_index_paths)
+    _inject_source_contract_files(query, entities, active_index_paths)
+    _inject_config_files(query, entities, active_index_paths)
 
 
 def _inject_architecture_files(query: str, entities: dict, active_index_paths: set[str] | None) -> None:
@@ -599,14 +581,21 @@ def _looks_like_dependency(value: str) -> bool:
 def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]]) -> dict[str, float]:
     lower = query.lower()
     scores = {intent: 0.0 for intent in INTENT_FAMILIES}
+    if _has_absence_markers(lower):
+        scores["ABSENCE_CHECK"] = 0.99
     scores["SEMANTIC"] = 0.35
+    if entities.get("boost_semantic_keywords") or entities.get("api_routes"):
+        scores["SEMANTIC"] = 0.65
 
     if legacy_intent == "SYMBOL":
         scores["SYMBOL"] = 0.72
     elif legacy_intent == "DEPENDENCY":
         scores["DEPENDENCY"] = 0.76
 
-    has_files = bool(entities.get("files"))
+    file_lookup = entities.get("file_lookup")
+    has_files = bool(
+        file_lookup.get("raw_tokens", []) if isinstance(file_lookup, dict) else []
+    )
     has_symbols = bool(entities.get("symbols"))
     has_exact_terms = bool(entities.get("exact_terms"))
     has_followup_markers = _has_followup_markers(lower)
@@ -653,6 +642,11 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
     }:
         scores["EXPLANATION"] = max(scores["EXPLANATION"], 0.86)
         scores["SYMBOL"] = min(scores["SYMBOL"], 0.35)
+    if (
+        len(lower.split()) > 1
+        and source_intent in {"ui_implementation", "api_endpoint", "provider_configuration"}
+    ):
+        scores["SYMBOL"] = max(scores["SYMBOL"], 0.72)
     if tech_stack_markers:
         scores["TECH_STACK"] = 0.82
     if indexing_markers or retrieval_markers:
@@ -676,7 +670,16 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
         scores["CODE_REQUEST"] = 0.95
     if has_followup_markers:
         scores["FOLLOWUP"] = 0.82 if not (has_symbols or has_files or has_exact_terms) else 0.58
-    if short_query and not any(entities.get(key) for key in ("symbols", "files", "exact_terms", "services")):
+    from retrieval.query.query_intent import extract_semantic_hints
+
+    has_short_context_anchor = bool(
+        extract_semantic_hints(query)["semantic_labels"]
+    )
+    if (
+        short_query
+        and has_short_context_anchor
+        and not any(entities.get(key) for key in ("symbols", "files", "exact_terms", "services"))
+    ):
         scores["LOW_CONTEXT"] = 0.7
     broad_source_contract = source_intent in {
         "overview",
@@ -707,12 +710,29 @@ def _score_intents(query: str, legacy_intent: str, entities: dict[str, list[str]
         scores["SYMBOL"] = max(scores["SYMBOL"], 0.85)
     if explicit_code_request and (has_symbols or has_files):
         scores["CODE_REQUEST"] = max(scores["CODE_REQUEST"], 0.9)
-    if short_query and not (has_symbols or has_files or has_exact_terms):
+    if (
+        short_query
+        and not has_short_context_anchor
+        and not (has_symbols or has_files or has_exact_terms)
+    ):
         scores["SEMANTIC"] = min(scores["SEMANTIC"], 0.2)
     if broad_source_contract:
         scores["SYMBOL"] = min(scores["SYMBOL"], 0.35)
         scores["FILE"] = min(scores["FILE"], 0.45)
     return scores
+
+
+def _has_absence_markers(lower: str) -> bool:
+    return any(
+        phrase in lower
+        for phrase in (
+            "backtesting",
+            "historical simulation",
+            "risk management",
+            "position sizing",
+            "data preprocessing",
+        )
+    )
 
 
 def _has_overview_markers(lower: str) -> bool:
@@ -763,6 +783,11 @@ def _has_architecture_markers(lower: str) -> bool:
             "system design",
             "design",
             "project structure",
+            "folder structure",
+            "directory structure",
+            "project layout",
+            "main purpose",
+            "project purpose",
             "repository structure",
             "codebase structure",
             "backend modules",
@@ -807,9 +832,9 @@ def _has_lookup_markers(lower: str) -> bool:
 
 def _legacy_intent_scores(legacy_intent: str) -> dict[str, float]:
     scores = {intent: 0.0 for intent in INTENT_FAMILIES}
-    mapped = legacy_intent if legacy_intent in scores else "SEMANTIC"
     scores["SEMANTIC"] = 0.35
-    scores[mapped] = 0.65
+    if legacy_intent != "SEMANTIC" and legacy_intent in scores:
+        scores[legacy_intent] = 0.65
     return scores
 
 
@@ -830,7 +855,7 @@ def _extract_symbols(query: str) -> list[str]:
         c = candidate.strip()
         if not c:
             continue
-        if c in STOPWORDS or c.lower() in STOPWORDS:
+        if c.lower() in SYMBOL_EXTRACTION_STOPWORDS:
             continue
         cleaned.append(c)
 

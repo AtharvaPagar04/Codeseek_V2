@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 import os
 import secrets
 import time
 import threading
 import urllib.parse
-import uuid
 from collections import defaultdict, deque
 from typing import Literal
 
@@ -42,7 +40,7 @@ from retrieval.stores.github_store import get_github_credential, upsert_github_c
 from retrieval.support.isolation import validate_collection_binding
 from retrieval.main import run_query
 from retrieval.memory.memory import ConversationMemory, SessionConversationMemory, ThreadConversationMemory
-from retrieval.generation.llm import LlmProviderError
+from retrieval.generation.llm import GenerationOutcome, GenerationOutcomeError, LlmProviderError
 from retrieval.support.embedding_provider import EmbeddingProviderError
 from retrieval.support.observability import (
     RETRIEVAL_ERRORS_TOTAL,
@@ -118,6 +116,80 @@ TRUST_X_FORWARDED_PROTO = os.getenv("CODESEEK_TRUST_X_FORWARDED_PROTO", "1").str
     "yes",
     "on",
 }
+
+
+def _require_persistable_assistant_answer(answer: str, meta: dict | None = None) -> None:
+    """Reject failed or blank generation before it can be returned or persisted."""
+    metadata = meta if isinstance(meta, dict) else {}
+    outcome_meta = metadata.get("generation_outcome") or metadata.get("llm_selection", {}).get(
+        "generation_outcome", {}
+    )
+    status = str(outcome_meta.get("status") or ("complete" if str(answer or "").strip() else "empty"))
+    if status == "partial" and str(answer or "").strip():
+        metadata["evidence_confidence"] = {
+            "level": "partial",
+            "reason": "provider_stream_interrupted_after_visible_text",
+        }
+        return
+    if status == "complete" and str(answer or "").strip():
+        return
+
+    outcome = GenerationOutcome(
+        status=status,
+        fallback_used=bool(outcome_meta.get("fallback_used", False)),
+        error_code=str(outcome_meta.get("error_code") or "no_visible_text"),
+    )
+    metadata["generation_outcome"] = outcome.metadata()
+    metadata["evidence_confidence"] = {
+        "level": "weak",
+        "reason": "generation_failed",
+    }
+    raise GenerationOutcomeError(outcome)
+
+
+STREAM_PROTOCOL_VERSION = 2
+
+
+def _stream_event(event_type: str, request_id: str, **fields) -> dict:
+    return {
+        "type": event_type,
+        "protocol_version": STREAM_PROTOCOL_VERSION,
+        "request_id": request_id,
+        **fields,
+    }
+
+
+def _stream_failure(exc: Exception, request_id: str, *, phase: str) -> tuple[dict, dict]:
+    status = "error"
+    code = "persistence_failed" if phase == "persistence" else "generation_failed"
+    message = "Unable to save the generated answer." if phase == "persistence" else "Query generation failed."
+    retryable = False
+    if isinstance(exc, GenerationOutcomeError):
+        outcome_status = exc.outcome.status
+        if outcome_status == "cancelled":
+            status, code, message = "cancelled", "cancelled", "Generation was cancelled."
+        elif outcome_status in {"empty", "reasoning_only"}:
+            code, message = exc.outcome.error_code or "no_visible_text", exc.detail
+        elif outcome_status == "transport_error":
+            code, message, retryable = "transport_error", exc.detail, True
+        else:
+            code, message = "provider_error", exc.detail
+    elif isinstance(exc, LlmProviderError):
+        code = "provider_error"
+        message = exc.detail
+        retryable = exc.status_code >= 500
+    return (
+        _stream_event(
+            "error",
+            request_id,
+            code=code,
+            message=message,
+            retryable=retryable,
+        ),
+        _stream_event("done", request_id, message_id=None, status=status),
+    )
+
+
 ALLOW_PLAINTEXT_SECRET_SUBMISSION = os.getenv(
     "CODESEEK_ALLOW_PLAINTEXT_SECRET_SUBMISSION",
     "1",
@@ -831,6 +903,10 @@ def _build_query_diagnostics(
             "reasons": list(validation.get("reasons") or []),
             "repaired": bool(validation.get("repaired_answer") or validation.get("repaired_sources")),
         }
+        if isinstance(validation.get("citation_resolution"), dict):
+            diagnostics["validation"]["citation_resolution"] = dict(
+                validation["citation_resolution"]
+            )
         if isinstance(validation.get("numeric_grounding"), dict):
             diagnostics["numeric_grounding"] = dict(validation["numeric_grounding"])
 
@@ -991,6 +1067,7 @@ def _query_impl(
                 session_id=session["id"] if session else None,
                 graph_retrieval_mode=body.graph_retrieval_mode,
             )
+        _require_persistable_assistant_answer(answer, meta)
         if session:
             diagnostics_data = None
             if ENABLE_DEBUG_DIAGNOSTICS:
@@ -1270,11 +1347,12 @@ async def query_stream_v1(
 
     class QueueStreamHandler:
         def on_status(self, message: str):
-            event_queue.put({"type": "status", "message": message})
+            event_queue.put(_stream_event("status", request_id, message=message))
         def on_delta(self, text: str):
-            event_queue.put({"type": "delta", "text": text})
+            event_queue.put(_stream_event("delta", request_id, text=text))
 
     def worker_thread():
+        phase = "generation"
         try:
             with _query_lock:
                 answer, sources, token_count, meta = run_query(
@@ -1289,64 +1367,102 @@ async def query_stream_v1(
                     graph_retrieval_mode=body.graph_retrieval_mode,
                 )
 
-            # Send the final sources and metadata
-            sources_event = {
-                "type": "sources",
-                "sources": sources,
-                "context_tokens": token_count,
-                "evidence_confidence": meta.get("evidence_confidence", {}).get("level", "strong"),
-            }
+            _require_persistable_assistant_answer(answer, meta)
+            if abort_event.is_set():
+                raise GenerationOutcomeError(
+                    GenerationOutcome(status="cancelled", error_code="cancelled"),
+                    "Generation was cancelled.",
+                )
+            if not session:
+                phase = "persistence"
+                raise RuntimeError("A persisted stream requires a repository session.")
+
+            phase = "persistence"
+            diagnostics_data = None
             if ENABLE_DEBUG_DIAGNOSTICS:
-                sources_event["diagnostics"] = _build_query_diagnostics(
+                diagnostics_data = _build_query_diagnostics(
                     meta=meta,
                     sources=sources,
                     token_count=token_count,
                     session=session,
                     provider_config=provider_config,
                 )
-            event_queue.put(sources_event)
-
-            # Save the message to DB/history if session exists and not aborted
-            if not abort_event.is_set() and session:
-                diagnostics_data = sources_event.get("diagnostics")
-                if thread:
-                    user_msg = append_thread_message(thread["id"], session["id"], "user", query_text)
-                    msg = append_thread_message(
-                        thread["id"],
-                        session["id"],
-                        "assistant",
-                        answer,
-                        sources=sources,
-                        context_tokens=token_count,
-                        diagnostics=diagnostics_data,
-                    )
-                else:
-                    user_msg = append_message(session["id"], "user", query_text)
-                    msg = append_message(
-                        session["id"],
-                        "assistant",
-                        answer,
-                        sources=sources,
-                        context_tokens=token_count,
-                        diagnostics=diagnostics_data,
-                    )
-                _persist_retrieval_trace_safely(
-                    session=session,
-                    thread=thread,
-                    user_message=user_msg,
-                    assistant_message=msg,
-                    query_text=query_text,
-                    answer=answer,
-                    meta=meta,
+            if thread:
+                user_msg = append_thread_message(thread["id"], session["id"], "user", query_text)
+                msg = append_thread_message(
+                    thread["id"],
+                    session["id"],
+                    "assistant",
+                    answer,
                     sources=sources,
+                    context_tokens=token_count,
                     diagnostics=diagnostics_data,
-                    request_id=request_id,
                 )
-                event_queue.put({"type": "done", "message_id": msg["id"]})
             else:
-                event_queue.put({"type": "done"})
+                user_msg = append_message(session["id"], "user", query_text)
+                msg = append_message(
+                    session["id"],
+                    "assistant",
+                    answer,
+                    sources=sources,
+                    context_tokens=token_count,
+                    diagnostics=diagnostics_data,
+                )
+            outcome = meta.get("generation_outcome") or meta.get("llm_selection", {}).get(
+                "generation_outcome", {}
+            )
+            generation_status = "partial" if outcome.get("status") == "partial" else "complete"
+            if generation_status == "partial":
+                trace_meta = meta.get("retrieval_trace")
+                if not isinstance(trace_meta, dict):
+                    trace_meta = {}
+                    meta["retrieval_trace"] = trace_meta
+                trace_meta["partial"] = True
+                trace_meta["partial_reason"] = "provider_stream_interrupted_after_visible_text"
+            _persist_retrieval_trace_safely(
+                session=session,
+                thread=thread,
+                user_message=user_msg,
+                assistant_message=msg,
+                query_text=query_text,
+                answer=answer,
+                meta=meta,
+                sources=sources,
+                diagnostics=diagnostics_data,
+                request_id=request_id,
+            )
+            event_queue.put(
+                _stream_event(
+                    "final_answer",
+                    request_id,
+                    message_id=msg["id"],
+                    text=answer,
+                    generation_status=generation_status,
+                    authoritative=True,
+                )
+            )
+            sources_event = _stream_event(
+                "sources",
+                request_id,
+                message_id=msg["id"],
+                sources=sources,
+                context_tokens=token_count,
+                evidence_confidence=meta.get("evidence_confidence", {}).get("level", "strong"),
+                diagnostics=diagnostics_data,
+            )
+            event_queue.put(sources_event)
+            event_queue.put(
+                _stream_event(
+                    "done",
+                    request_id,
+                    message_id=msg["id"],
+                    status=generation_status,
+                )
+            )
         except Exception as exc:
-            event_queue.put({"type": "error", "message": str(exc)})
+            error_event, done_event = _stream_failure(exc, request_id, phase=phase)
+            event_queue.put(error_event)
+            event_queue.put(done_event)
 
     thread_obj = threading.Thread(target=worker_thread)
     thread_obj.start()
@@ -1364,10 +1480,6 @@ async def query_stream_v1(
                 except queue.Empty:
                     await asyncio.sleep(0.05)
                     continue
-
-                if event["type"] == "error":
-                    yield json.dumps(event) + "\n"
-                    break
 
                 yield json.dumps(event) + "\n"
 

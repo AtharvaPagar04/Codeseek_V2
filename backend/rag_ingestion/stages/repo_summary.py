@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from collections import Counter
+import os
+from pathlib import Path
 
 from rag_ingestion.models.chunk import Chunk
+from rag_ingestion.stages.filtering import is_virtual_environment_dir
 
 REPO_SUMMARY_PATH = "__repo_summary__.md"
 REPO_SUMMARY_EVIDENCE_FILENAMES = {
@@ -33,7 +36,14 @@ def build_repo_summary_chunk(chunks: list[Chunk], repository: dict) -> Chunk | N
         return None
 
     repo_name = str(repository.get("repository_name", "")).strip() or "repository"
-    purpose = _first_non_empty(chunk.purpose for chunk in evidence)
+    readme_chunks = [
+        chunk for chunk in evidence
+        if Path(chunk.relative_path or "").name.lower().startswith("readme")
+    ]
+    readme_purpose = _first_non_empty(chunk.purpose for chunk in readme_chunks)
+    if not readme_purpose:
+        readme_purpose = _readme_purpose_from_content(readme_chunks)
+    purpose = readme_purpose or _first_non_empty(chunk.purpose for chunk in evidence)
     dependencies = _collect(evidence, "dependencies")
     dev_dependencies = _collect(evidence, "dev_dependencies")
     frameworks = _collect(evidence, "detected_frameworks")
@@ -49,6 +59,7 @@ def build_repo_summary_chunk(chunks: list[Chunk], repository: dict) -> Chunk | N
     facts: list[str] = [f"Repository: {repo_name}"]
     if purpose:
         facts.append(f"Purpose: {purpose}")
+        facts.append(f"Project Purpose & Scope: {purpose}")
     if frameworks:
         facts.append(f"Frameworks: {', '.join(frameworks[:12])}")
     if dependencies:
@@ -73,7 +84,8 @@ def build_repo_summary_chunk(chunks: list[Chunk], repository: dict) -> Chunk | N
         facts.append(f"Architecture notes: {'; '.join(architecture_notes[:6])}")
 
     source_files = _source_files(evidence)
-    content = _render_summary_content(repo_name, facts, source_files)
+    directory_tree = _project_directory_tree(repository, evidence)
+    content = _render_summary_content(repo_name, facts, source_files, directory_tree)
     return Chunk(
         relative_path=REPO_SUMMARY_PATH,
         language="metadata",
@@ -98,17 +110,93 @@ def build_repo_summary_chunk(chunks: list[Chunk], repository: dict) -> Chunk | N
         usage_commands=usage_commands,
         architecture_notes=architecture_notes,
         content=content,
-        summary="\n".join(facts),
+        summary=content,
     )
 
 
-def _render_summary_content(repo_name: str, facts: list[str], source_files: list[str]) -> str:
+def _render_summary_content(
+    repo_name: str,
+    facts: list[str],
+    source_files: list[str],
+    directory_tree: str,
+) -> str:
     lines = [f"# Repository Summary: {repo_name}", ""]
     lines.extend(f"- {fact}" for fact in facts)
+    lines.extend(["", "## Project Purpose & Scope"])
+    purpose_fact = next(
+        (fact.split(": ", 1)[1] for fact in facts if fact.startswith("Project Purpose & Scope: ")),
+        "Not explicitly stated in README.md.",
+    )
+    lines.append(purpose_fact)
+    lines.extend(["", "## Project Directory Structure", directory_tree or "(directory tree unavailable)"])
     if source_files:
         lines.extend(["", "## Source Evidence"])
         lines.extend(f"- {path}" for path in source_files[:20])
     return "\n".join(lines).strip() + "\n"
+
+
+def _project_directory_tree(repository: dict, chunks: list[Chunk], *, max_depth: int = 3) -> str:
+    """Render a bounded, deterministic tree for repo-level retrieval context."""
+    root_value = str(repository.get("repository_root", "")).strip()
+    root = Path(root_value).expanduser() if root_value else None
+    if root is None or not root.is_dir():
+        file_paths = [Path(chunk.file_path) for chunk in chunks if chunk.file_path]
+        if file_paths:
+            try:
+                root = Path(os.path.commonpath([str(path.parent) for path in file_paths]))
+            except ValueError:
+                root = None
+    if root is None or not root.is_dir():
+        return ""
+
+    excluded = {
+        "venv",
+        ".venv",
+        ".git",
+        "__pycache__",
+        "node_modules",
+        ".idea",
+        ".vscode",
+    }
+    rows: list[str] = [root.name or "."]
+    max_entries = 300
+    for current, directories, files in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        relative = current_path.relative_to(root)
+        depth = len(relative.parts)
+        directories[:] = sorted(
+            directory for directory in directories
+            if directory not in excluded
+            and not is_virtual_environment_dir(directory)
+            and not (current_path / directory).is_symlink()
+        )
+        files = sorted(files)
+        if depth >= max_depth:
+            directories[:] = []
+        entries = [(name, True) for name in directories] + [(name, False) for name in files]
+        for name, is_directory in entries:
+            entry_depth = depth + 1
+            if entry_depth > max_depth:
+                continue
+            entry = (relative / name).as_posix() if relative.parts else name
+            rows.append(f"{'  ' * entry_depth}{entry}{'/' if is_directory else ''}")
+            if len(rows) >= max_entries:
+                rows.append("  ... (tree truncated)")
+                return "\n".join(rows)
+    return "\n".join(rows)
+
+
+def _readme_purpose_from_content(chunks: list[Chunk]) -> str:
+    """Extract a short purpose sentence when README metadata was not prebuilt."""
+    heading = ""
+    for chunk in chunks:
+        for line in chunk.content.splitlines():
+            text = line.strip()
+            if text.startswith("#") and not heading:
+                heading = text.lstrip("#").strip()
+            if text and not text.startswith("#") and len(text.split()) >= 5:
+                return text.rstrip(".")
+    return heading
 
 
 def _collect(chunks: list[Chunk], attr: str) -> list[str]:

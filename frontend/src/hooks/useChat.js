@@ -1,11 +1,12 @@
 import { useState, useCallback, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { querySessionStream } from '../utils/api';
+import { querySessionStream } from '../utils/api.js';
 
 export function useChat({ appendMessage }) {
   const [isLoading, setIsLoading] = useState(false);
   const pendingSessionId = useRef(null);
   const abortControllerRef = useRef(null);
+  const activeRequestIdRef = useRef(null);
 
   const cancelActiveQuery = useCallback(() => {
     if (abortControllerRef.current) {
@@ -14,6 +15,7 @@ export function useChat({ appendMessage }) {
     }
     setIsLoading(false);
     pendingSessionId.current = null;
+    activeRequestIdRef.current = null;
   }, []);
 
   const sendMessage = useCallback(
@@ -58,6 +60,9 @@ export function useChat({ appendMessage }) {
 
       const controller = new AbortController();
       abortControllerRef.current = controller;
+      const requestId = uuidv4();
+      activeRequestIdRef.current = requestId;
+      const isCurrentRequest = () => activeRequestIdRef.current === requestId;
 
       // Drip buffer: accumulate incoming deltas and release them gradually
       let dripBuffer = '';
@@ -89,6 +94,7 @@ export function useChat({ appendMessage }) {
       };
 
       const scheduleDrip = (text) => {
+        if (authoritativeAnswer !== null) return;
         dripBuffer += text;
         if (!dripTimer) {
           dripTimer = setTimeout(flushDrip, DRIP_INTERVAL_MS);
@@ -101,18 +107,38 @@ export function useChat({ appendMessage }) {
           clearTimeout(dripTimer);
           dripTimer = null;
         }
-        if (dripBuffer.length > 0) {
+        if (authoritativeAnswer === null && dripBuffer.length > 0) {
           accumulatedAnswer += dripBuffer;
-          dripBuffer = '';
         }
+        dripBuffer = '';
       };
 
       let accumulatedAnswer = '';
       let answerSources = [];
       let answerDiagnostics = null;
       let contextTokens = null;
+      let authoritativeAnswer = null;
+      let generationStatus = null;
+      let streamFailure = null;
 
       let finalMessageId = loadingId;
+      const renderInterrupted = (message = 'Generation stopped.') => appendMessage(
+        session.id,
+        activeThreadId,
+        {
+          __replaceId: loadingId,
+          id: authoritativeAnswer === null ? loadingId : finalMessageId,
+          role: 'assistant',
+          content: authoritativeAnswer ?? message,
+          sources: authoritativeAnswer === null ? [] : answerSources,
+          diagnostics: authoritativeAnswer === null ? null : answerDiagnostics,
+          context_tokens: authoritativeAnswer === null ? null : contextTokens,
+          timestamp: new Date().toISOString(),
+          loading: false,
+          error: true,
+          generation_status: authoritativeAnswer === null ? 'cancelled' : generationStatus,
+        },
+      );
 
       try {
         await querySessionStream({
@@ -120,14 +146,41 @@ export function useChat({ appendMessage }) {
           session_id: session.id,
           thread_id: activeThreadId,
           graph_retrieval_mode: options.graphRetrievalMode || 'standard',
+          request_id: requestId,
           signal: controller.signal,
           onStatus: (status) => {
+            if (!isCurrentRequest()) return;
             console.log('[useChat] Status:', status);
           },
           onDelta: (text) => {
+            if (!isCurrentRequest()) return;
             scheduleDrip(text);
           },
+          onFinalAnswer: (event) => {
+            if (!isCurrentRequest()) return;
+            if (dripTimer) clearTimeout(dripTimer);
+            dripTimer = null;
+            dripBuffer = '';
+            authoritativeAnswer = event.text;
+            accumulatedAnswer = event.text;
+            finalMessageId = event.message_id;
+            generationStatus = event.generation_status;
+            appendMessage(session.id, activeThreadId, {
+              __replaceId: loadingId,
+              id: loadingId,
+              role: 'assistant',
+              content: authoritativeAnswer,
+              sources: answerSources,
+              diagnostics: answerDiagnostics,
+              context_tokens: contextTokens,
+              generation_status: generationStatus,
+              timestamp: new Date().toISOString(),
+              loading: true,
+              error: false,
+            });
+          },
           onSources: (data) => {
+            if (!isCurrentRequest()) return;
             answerSources = data.sources || [];
             answerDiagnostics = data.diagnostics || null;
             contextTokens = data.context_tokens;
@@ -146,13 +199,19 @@ export function useChat({ appendMessage }) {
             });
           },
           onDone: (event) => {
+            if (!isCurrentRequest()) return;
             console.log('[useChat] Stream done.');
+            generationStatus = event?.status || generationStatus;
             if (event && event.message_id) {
               finalMessageId = event.message_id;
             }
+            if (event?.status === 'cancelled' && !streamFailure) {
+              streamFailure = new Error('Generation was cancelled.');
+            }
           },
           onError: (errMsg) => {
-            throw new Error(errMsg);
+            if (!isCurrentRequest()) return;
+            streamFailure = new Error(errMsg);
           },
         });
 
@@ -160,56 +219,55 @@ export function useChat({ appendMessage }) {
         flushRemainingDrip();
 
         if (controller.signal.aborted) {
+          renderInterrupted();
           return;
         }
+        if (!isCurrentRequest()) return;
+        if (streamFailure) throw streamFailure;
 
         const assistantMessage = {
           id: finalMessageId,
           role: 'assistant',
-          content: accumulatedAnswer || '(no answer returned)',
+          content: authoritativeAnswer ?? accumulatedAnswer,
           sources: answerSources,
           diagnostics: answerDiagnostics,
           context_tokens: contextTokens,
           timestamp: new Date().toISOString(),
           loading: false,
           error: false,
+          generation_status: generationStatus || 'complete',
         };
         appendMessage(session.id, activeThreadId, { __replaceId: loadingId, ...assistantMessage });
 
       } catch (err) {
         flushRemainingDrip();
         if (controller.signal.aborted) {
-          const assistantMessage = {
-            id: loadingId,
-            role: 'assistant',
-            content: accumulatedAnswer || 'Generation stopped.',
-            sources: answerSources,
-            diagnostics: answerDiagnostics,
-            context_tokens: contextTokens,
-            timestamp: new Date().toISOString(),
-            loading: false,
-            error: false,
-          };
-          appendMessage(session.id, activeThreadId, { __replaceId: loadingId, ...assistantMessage });
+          renderInterrupted();
           return;
         }
 
         console.error('[useChat] Query failed:', err);
         const errorMessage = {
-          id: loadingId,
+          id: authoritativeAnswer === null ? loadingId : finalMessageId,
           role: 'assistant',
-          content: err.message || 'Something went wrong. Please try again.',
-          sources: [],
+          content: authoritativeAnswer ?? err.message ?? 'Something went wrong. Please try again.',
+          sources: authoritativeAnswer === null ? [] : answerSources,
+          diagnostics: authoritativeAnswer === null ? null : answerDiagnostics,
+          context_tokens: authoritativeAnswer === null ? null : contextTokens,
           timestamp: new Date().toISOString(),
           loading: false,
           error: true,
+          generation_status: generationStatus,
         };
         appendMessage(session.id, activeThreadId, { __replaceId: loadingId, ...errorMessage });
       } finally {
-        setIsLoading(false);
-        pendingSessionId.current = null;
         if (abortControllerRef.current === controller) {
           abortControllerRef.current = null;
+        }
+        if (activeRequestIdRef.current === requestId) {
+          activeRequestIdRef.current = null;
+          pendingSessionId.current = null;
+          setIsLoading(false);
         }
       }
     },

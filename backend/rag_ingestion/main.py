@@ -510,11 +510,22 @@ def run_incremental_pipeline(
     processable = []
     for rel_path in targets:
         abs_path = root / rel_path
-        if not abs_path.exists():
+        try:
+            if abs_path.is_symlink():
+                log_skip(rel_path, "symlink_file", "skipped")
+                continue
+            stat = abs_path.stat()
+            resolved = abs_path.resolve(strict=True)
+            resolved.relative_to(root)
+            if resolved != abs_path:
+                log_skip(rel_path, "symlink_file", "skipped")
+                continue
+            stat = resolved.stat()
+        except (OSError, RuntimeError, ValueError) as error:
+            log_skip(rel_path, f"discovery_{type(error).__name__}", "skipped")
             continue
-        stat = abs_path.stat()
         file_rec = FileRecord(
-            path=str(abs_path.resolve()),
+            path=str(resolved),
             relative_path=rel_path,
             extension=abs_path.suffix,
             size_bytes=stat.st_size,

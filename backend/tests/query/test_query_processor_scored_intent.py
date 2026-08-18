@@ -5,6 +5,14 @@ from retrieval.query import query_processor
 
 
 class QueryProcessorScoredIntentTests(unittest.TestCase):
+    def test_routes_missing_advanced_features_to_absence_check(self) -> None:
+        result = query_processor.process_query(
+            "Does this project support backtesting or historical simulation?"
+        )
+
+        self.assertEqual(result["primary_intent"], "ABSENCE_CHECK")
+        self.assertEqual(result["intent_scores"]["ABSENCE_CHECK"], 0.99)
+
     def test_extracts_env_key_as_config_entity(self) -> None:
         result = query_processor.process_query("Where is CODESEEK_DATABASE_URL configured?")
 
@@ -81,12 +89,94 @@ class QueryProcessorScoredIntentTests(unittest.TestCase):
         self.assertGreaterEqual(result["intent_scores"]["ARCHITECTURE"], 0.85)
         self.assertLess(result["intent_scores"]["FILE"], result["intent_scores"]["ARCHITECTURE"])
 
+    def test_folder_structure_routes_to_architecture_intent(self) -> None:
+        result = query_processor.process_query("What folder structure is used?")
+
+        self.assertTrue(query_processor._has_architecture_markers("what folder structure is used"))
+        self.assertEqual(result["primary_intent"], "ARCHITECTURE")
+
     def test_behavior_question_does_not_promote_question_word_symbol(self) -> None:
         result = query_processor.process_query("How are batch errors caught?")
 
         self.assertNotIn("How", result["entities"]["symbols"])
         self.assertIn(result["primary_intent"], {"EXPLANATION", "TRACE"})
         self.assertGreaterEqual(result["intent_scores"]["EXPLANATION"], 0.86)
+
+    def test_symbol_stopwords_do_not_pollute_entity_extraction(self) -> None:
+        result = query_processor.process_query(
+            "how does the search function handle errors"
+        )
+
+        self.assertFalse(
+            {"search", "function", "handle"}.intersection(result["entities"]["symbols"])
+        )
+
+    def test_low_confidence_chitchat_routes_out_of_scope(self) -> None:
+        result = query_processor.process_query("hmm interesting")
+
+        self.assertEqual(result["primary_intent"], "OUT_OF_SCOPE")
+        self.assertEqual(result["response_mode"], "chitchat")
+        self.assertLess(result["confidence"], 0.50)
+
+    def test_login_endpoint_adds_semantic_route_and_file_hints(self) -> None:
+        result = query_processor.process_query("Where is the login endpoint?")
+
+        self.assertIn("auth", result["entities"]["boost_semantic_keywords"])
+        self.assertIn("/api/v1/auth/login", result["entities"]["api_routes"])
+        self.assertIn("backend/auth/router.py", result["entities"]["files"])
+
+    def test_anaphora_is_resolved_before_entity_extraction(self) -> None:
+        from retrieval.main import _resolve_query_info
+        from retrieval.memory.memory import ConversationMemory
+
+        memory = ConversationMemory(max_turns=4)
+        memory.add(
+            "show create_session",
+            "Creates a session.",
+            resolved_query="show create_session",
+            entities={"symbols": ["create_session"]},
+            rendered_sources=[
+                {
+                    "relative_path": "backend/auth.py",
+                    "symbol_name": "create_session",
+                }
+            ],
+            primary_intent="SYMBOL",
+        )
+
+        result = _resolve_query_info(
+            "how does it work?",
+            memory,
+            recent_turns=memory.recent_turn_entities(max_turns=8),
+        )
+
+        self.assertTrue(result["query_rewritten"])
+        self.assertIn("create_session", result["raw_query"])
+        self.assertIn("create_session", result["entities"]["symbols"])
+
+    def test_out_of_scope_bypasses_retrieval(self) -> None:
+        from retrieval.main import run_query
+        from retrieval.memory.memory import ConversationMemory
+
+        with patch(
+            "retrieval.main.generate_conversational_answer", return_value="Hello."
+        ), patch(
+            "retrieval.main.search",
+            side_effect=AssertionError("RAG search must be bypassed"),
+        ), patch(
+            "retrieval.main.validate_collection_binding",
+            side_effect=AssertionError("Qdrant validation must be bypassed"),
+        ):
+            answer, sources, token_count, meta = run_query(
+                "hmm interesting",
+                ConversationMemory(max_turns=2),
+                return_meta=True,
+            )
+
+        self.assertEqual(answer, "Hello.")
+        self.assertEqual(sources, [])
+        self.assertEqual(token_count, 0)
+        self.assertEqual(meta["response_mode"], "chitchat")
 
     def test_injects_auth_flow_symbols_for_varied_lifecycle_wording(self) -> None:
         result = query_processor.process_query("how does authentication cookie lifecycle work")
